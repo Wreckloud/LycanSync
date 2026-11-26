@@ -12,6 +12,7 @@ mod audio_devices;
 #[cfg(target_os = "windows")]
 mod windows_bridge {
     use super::*;
+    use std::collections::HashMap;
     use std::path::Path;
     use windows::Win32::Foundation::{
         CloseHandle, DUPLICATE_SAME_ACCESS, FILETIME, HANDLE, STILL_ACTIVE,
@@ -286,6 +287,32 @@ mod windows_bridge {
         pub executable: String,
         pub pid: u32,
         pub creation: String,
+        pub window_title: Option<String>,
+    }
+
+    // EnumWindows 按窗口前后次序枚举，每个候选进程只读取最前面的可见标题。
+    unsafe extern "system" fn read_application_window(
+        window: windows::Win32::Foundation::HWND,
+        param: windows::Win32::Foundation::LPARAM,
+    ) -> windows::core::BOOL {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GW_OWNER, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        };
+        let titles = unsafe { &mut *(param.0 as *mut HashMap<u32, Option<String>>) };
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        if let Some(title) = titles.get_mut(&pid)
+            && title.is_none()
+            && unsafe { IsWindowVisible(window) }.as_bool()
+            && unsafe { GetWindow(window, GW_OWNER) }.is_err()
+        {
+            let mut text = [0u16; 256];
+            let length = unsafe { GetWindowTextW(window, &mut text) };
+            if length > 0 {
+                *title = Some(String::from_utf16_lossy(&text[..length as usize]));
+            }
+        }
+        true.into()
     }
 
     #[napi_derive::napi]
@@ -327,6 +354,17 @@ mod windows_bridge {
                 break;
             }
         }
+        let mut titles: HashMap<u32, Option<String>> =
+            candidates.keys().map(|&pid| (pid, None)).collect();
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::EnumWindows(
+                Some(read_application_window),
+                windows::Win32::Foundation::LPARAM(
+                    (&mut titles as *mut HashMap<u32, Option<String>>) as isize,
+                ),
+            )
+        }
+        .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
         let mut result = Vec::new();
         for (&pid, (parent, name)) in &candidates {
             // 浏览器的渲染和音频子进程随根进程一起采集。
@@ -372,6 +410,7 @@ mod windows_bridge {
                 pid,
                 executable: name.clone(),
                 creation: birth.to_string(),
+                window_title: titles.remove(&pid).flatten(),
             });
         }
         result.sort_by_key(|p| p.pid);
