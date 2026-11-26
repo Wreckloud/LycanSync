@@ -45,7 +45,7 @@ onMounted(() => {
   stopPositioning = autoUpdate(props.anchor, element, async () => {
     const request = ++calculation;
     const { x, y } = await computePosition(props.anchor, element, {
-      strategy: 'fixed', placement: 'bottom-end', middleware: [offset(6), flip({ padding: 8 }), shift({ padding: 8 })],
+      strategy: 'fixed', placement: 'bottom-start', middleware: [offset(6), flip({ padding: 8 }), shift({ padding: 8 })],
     });
     if (request !== calculation) return;
     Object.assign(element.style, { left: x + 'px', top: y + 'px', visibility: 'visible' });
