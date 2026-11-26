@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { autoUpdate, computePosition, flip, offset, shift, size } from '@floating-ui/dom';
 import { ChevronLeft, ChevronRight } from '@lucide/vue';
 
-interface Source { id: string; name: string; icon?: string; browser?: boolean; common?: boolean }
+interface Source { id: string; name: string; icon?: string; common?: boolean }
 const props = defineProps<{ anchor: HTMLElement; sources: Source[]; error: string }>();
 const emit = defineEmits<{ choose: [id: string]; close: [restoreFocus: boolean] }>();
 const frequent = computed(() => props.sources.filter(source => source.common));
@@ -22,7 +22,7 @@ let stopPositioning: (() => void) | undefined;
 let calculation = 0;
 
 function focusPage() {
-  const panel = root.value?.lastElementChild;
+  const panel = root.value?.querySelector(`[data-page="${pages.value.at(-1)?.key}"]:not([inert])`);
   (panel?.querySelector<HTMLElement>('.source-row') ?? panel?.querySelector<HTMLElement>('button') ?? root.value)?.focus({ preventScroll: true });
 }
 async function toggleOther() {
@@ -76,8 +76,10 @@ onScopeDispose(() => {
 
 <template>
   <div ref="root" class="source-menu" tabindex="-1" @keydown.esc.stop.prevent="escape">
+    <TransitionGroup :name="compact ? 'surface-panel' : 'surface-side'"
+      @before-leave="($event as HTMLElement).inert = true" @before-enter="($event as HTMLElement).inert = false">
     <section v-for="page in pages" :key="page.key" class="call-control-menu" :class="{ 'side-page': page.key === 'other' && !compact }"
-      :aria-label="page.label">
+      :aria-label="page.label" :data-page="page.key">
       <header class="call-submenu-heading">
         <button v-if="page.key === 'other' && compact" type="button" class="call-menu-action call-submenu-back" aria-label="返回伴奏来源" @click="toggleOther"><ChevronLeft :size="14" /></button>
         {{ page.label }}
@@ -85,7 +87,7 @@ onScopeDispose(() => {
       <div class="source-list">
         <button v-for="source in page.rows" :key="source.id" type="button" class="call-menu-action source-row" @click="emit('choose', source.id)">
           <img v-if="source.common && source.icon" :src="source.icon" width="16" height="16" alt="" />
-          <span>{{ source.name }}<small v-if="source.browser">其他标签页的声音也可能被听到</small></span>
+          <span>{{ source.name }}</span>
         </button>
         <p v-if="!page.rows.length">打开播放器或浏览器后，它会出现在这里。</p>
       </div>
@@ -94,6 +96,7 @@ onScopeDispose(() => {
       </button>
       <p v-if="error && page === pages.at(-1)" role="alert">{{ error }}</p>
     </section>
+    </TransitionGroup>
   </div>
 </template>
 
@@ -101,9 +104,10 @@ onScopeDispose(() => {
 <style scoped>
 .source-menu { position: fixed; z-index: 30; width: min(224px, calc(100vw - 16px)); visibility: hidden; --call-menu-max-height: min(420px, calc(100dvh - 16px)); }
 .call-control-menu { width: 100%; gap: 6px; }
+.call-control-menu.surface-panel-leave-active { position: absolute; top: 0; left: 0; }
 .side-page { position: absolute; left: calc(100% + 8px); top: 0; max-height: min(var(--call-menu-max-height), calc(100dvh - var(--menu-top) - 8px)); }
 .call-menu-action { justify-content: flex-start; }
-.source-list small, .source-list p { display: block; color: var(--muted); font-size: 11px; }
+.source-list p { color: var(--muted); font-size: 11px; }
 .source-list p, [role="alert"] { margin: 0; }
 [role="alert"] { color: var(--danger); }
 .other-trigger { border-top: 1px solid var(--border-soft); border-radius: 0; }

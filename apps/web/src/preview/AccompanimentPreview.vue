@@ -18,15 +18,15 @@ import vlcIcon from './assets/vlc.png';
 import stardewIcon from './assets/stardew.png';
 
 interface Source {
-  id: string; name: string; icon?: string; browser?: boolean; common?: boolean; open: boolean; paused: boolean;
+  id: string; name: string; icon?: string; common?: boolean; open: boolean; paused: boolean;
 }
 const sources = ref<Source[]>([
   { id: 'player', name: 'QQ 音乐', icon: qqMusicIcon, common: true, open: true, paused: false },
   { id: 'netease', name: '网易云音乐', icon: neteaseIcon, common: true, open: false, paused: true },
   { id: 'spotify', name: 'Spotify', icon: spotifyIcon, common: true, open: false, paused: true },
-  { id: 'browser', name: 'Google Chrome', icon: chromeIcon, browser: true, open: true, paused: false },
-  { id: 'edge', name: 'Microsoft Edge', icon: edgeIcon, browser: true, open: false, paused: false },
-  { id: 'firefox', name: 'Firefox', icon: firefoxIcon, browser: true, open: false, paused: false },
+  { id: 'browser', name: 'Google Chrome', icon: chromeIcon, common: true, open: true, paused: false },
+  { id: 'edge', name: 'Microsoft Edge', icon: edgeIcon, common: true, open: false, paused: false },
+  { id: 'firefox', name: 'Firefox', icon: firefoxIcon, common: true, open: false, paused: false },
   { id: 'vlc', name: 'VLC', icon: vlcIcon, open: true, paused: true },
   { id: 'stardew', name: '星露谷物语', icon: stardewIcon, open: false, paused: false },
   { id: 'other', name: '本地播放器', open: false, paused: true },
