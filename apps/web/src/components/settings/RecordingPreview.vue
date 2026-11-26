@@ -8,7 +8,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 import RecordingTimeline from './RecordingTimeline.vue';
 import RecordingTool from './RecordingTool.vue';
 
-const props = defineProps<{ source: string; entry: RecordingLibraryEntry }>();
+const props = defineProps<{ source: string; entry: RecordingLibraryEntry; autoplay?: boolean }>();
 const emit = defineEmits<{ back: []; external: []; saved: [clip: RecordingLibraryEntry] }>();
 const share = inject(RECORDING_SHARE);
 const desktop = window.lycanDesktop;
@@ -202,7 +202,7 @@ onScopeDispose(() => {
   <section ref="workspace" class="recording-workspace" role="dialog" aria-modal="true" aria-label="录像预览" tabindex="-1" @keydown="keepDialogFocus($event); keys($event)">
     <RecordingTool label="返回录像列表" class="close" :disabled="busy" @click="leave()"><X :size="24" /></RecordingTool>
     <div class="stage">
-      <video v-if="!failed" ref="player" :src="source" :style="{ '--ratio': aspectRatio }" preload="metadata" playsinline @click="play()" @play="playbackChanged"
+      <video v-if="!failed" ref="player" :src="source" :autoplay="autoplay" :style="{ '--ratio': aspectRatio }" preload="metadata" playsinline @click="play()" @play="playbackChanged"
         @pause="playbackChanged" @timeupdate="syncClock" @ended="playbackChanged" @error="playbackFailed"
         @loadedmetadata="player?.videoWidth ? metadata(player.duration) : playbackFailed()" />
       <div v-else>暂时无法预览这个录像。<button @click="emit('external')">使用系统播放器</button></div>

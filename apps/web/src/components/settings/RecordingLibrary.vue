@@ -19,7 +19,7 @@ const expandedUnavailable = ref(false);
 const filters = [{ id: 'all', label: '全部' }, { id: 'recording', label: '录制' }, { id: 'replay', label: '回放' }, { id: 'clip', label: '剪辑' }] as const;
 const kindLabel = (entry: RecordingLibraryEntry) => ({ recording: '录制', replay: '回放', clip: '剪辑' }[entry.kind ?? 'recording']);
 const title = (entry: RecordingLibraryEntry) => `${entry.applicationName || '未命名'} · ${kindLabel(entry)}`;
-const preview = ref<RecordingLibraryEntry | null>(null);
+const preview = ref<{ entry: RecordingLibraryEntry; autoplay: boolean } | null>(null);
 const recordingSource = (id: string) => `lycan://app/recordings/${encodeURIComponent(id)}`;
 const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording' && entry.availability === 'available' && (entry.bytes ?? 0) > 0;
 const dialog = ref<HTMLElement | null>(null);
@@ -58,18 +58,18 @@ watch(entries, async () => {
 });
 watch(library.kind, () => { void library.load(); });
 function previewSavedClip(clip: RecordingLibraryEntry) {
-  preview.value = clip;
+  preview.value = { entry: clip, autoplay: false };
   void library.load();
 }
 async function returnToList() {
-  const id = preview.value?.id;
+  const id = preview.value?.entry.id;
   preview.value = null;
   await nextTick();
   const opener = id && dialog.value?.querySelector<HTMLButtonElement>(`[data-recording-id="${CSS.escape(id)}"] .library-preview:enabled`);
   (opener || dialog.value)?.focus({ preventScroll: true });
 }
 function openExternalPreview() {
-  const entry = preview.value;
+  const entry = preview.value?.entry;
   if (!entry) return;
   preview.value = null;
   void library.file(entry, 'play');
@@ -112,7 +112,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         <section v-for="group in groups" :key="group.date" class="library-day">
           <h3>{{ group.date }}</h3>
           <article v-for="entry in group.items" :key="entry.id" :data-recording-id="entry.id" class="library-row">
-            <button type="button" class="library-preview" :aria-label="`预览 ${title(entry)}`" :disabled="!canPreview(entry)" @click="preview = entry">
+            <button type="button" class="library-preview" :aria-label="`播放 ${title(entry)}`" :disabled="!canPreview(entry)" @click="preview = { entry, autoplay: true }">
               <RecordingThumbnail play-badge :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @duration="library.updateDuration(entry, $event)" />
               <span class="library-description">
                 <strong>{{ title(entry) }}</strong>
@@ -146,7 +146,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
     </section>
     <DialogTransition>
       <div v-if="preview" class="dialog-backdrop">
-        <RecordingPreview :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @back="returnToList" @external="openExternalPreview" @saved="previewSavedClip" />
+        <RecordingPreview :key="preview.entry.id" :entry="preview.entry" :source="recordingSource(preview.entry.id)" :autoplay="preview.autoplay" @back="returnToList" @external="openExternalPreview" @saved="previewSavedClip" />
       </div>
     </DialogTransition>
   </div>

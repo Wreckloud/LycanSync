@@ -712,9 +712,20 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await page.evaluate(() => {
     window.lycanDesktop!.getRecordingLibrary = async () => ({ items: [{ id: 'settings-clip', sessionId: 'session',
       createdAt: 1, durationMs: 1000, width: 640, height: 360, bytes: 100, state: 'saved', availability: 'available' }], hasMore: false });
+    // 浏览器没有桌面录像协议，用同一段合成媒体验证实际播放。
+    const src = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')!;
+    Object.defineProperty(HTMLMediaElement.prototype, 'src', { ...src, set(value: string) {
+      src.set!.call(this, value === 'lycan://app/recordings/settings-clip' ? '/tests/fixtures/chat-clip.webm' : value);
+    } });
   });
   await page.getByLabel('个人状态与返回应用', { exact: true }).getByRole('button', { name: '个人菜单' }).click();
   await page.getByRole('dialog', { name: '个人菜单' }).getByRole('button', { name: '录像管理' }).click();
+  const recording = manager.getByRole('button', { name: '播放 未命名 · 录制' });
+  await recording.click();
+  const preview = page.getByRole('dialog', { name: '录像预览' });
+  await expect.poll(() => preview.locator('video').evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0);
+  await preview.getByRole('button', { name: '返回录像列表' }).click();
+  await expect(recording).toBeFocused();
   await manager.getByRole('button', { name: '分享', exact: true }).click();
   const destinations = page.getByRole('dialog', { name: '分享到群聊' });
   await expect(destinations.getByRole('button', { name: group.name })).toBeVisible();
