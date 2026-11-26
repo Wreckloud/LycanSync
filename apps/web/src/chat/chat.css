@@ -71,6 +71,7 @@
 
 .chat-message { display: flex; gap: 9px; }
 .chat-message.is-grouped { margin-top: -9px; }
+.chat-message.is-own.is-text + .chat-message.is-grouped { margin-top: -3px; }
 .chat-message-avatar { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; }
 .chat-message-avatar-placeholder { width: 32px; flex: 0 0 32px; }
 .chat-message-initial { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
@@ -80,8 +81,10 @@
 .chat-message-meta { display: flex; align-items: center; gap: 9px; }
 .chat-message-meta strong { font-size: 15px; line-height: 1.25; }
 .chat-message-meta time { color: var(--subtle); font-size: 11px; }
+.chat-message-main { position: relative; display: flow-root; }
 .chat-message-content { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-message-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.chat-send-pending { position: absolute; top: 100%; inset-inline-start: 0; color: var(--subtle); font-size: 11px; line-height: 12px; user-select: none; pointer-events: none; }
 .chat-image-frame { position: relative; max-width: 100%; margin-top: 6px; overflow: hidden; border-radius: 8px; background: var(--panel-soft); }
 .chat-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .chat-image-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
@@ -180,10 +183,11 @@ button.chat-file-summary { cursor: pointer; }
 .composer-original { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; cursor: pointer; }
 .composer-original input { margin: 0; accent-color: var(--accent); }
 .composer-attachment-name { min-width: 0; flex: 1; }
-.chat-transfer-media { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 4px 8px; }
-.chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.chat-transfer-media > .chat-transfer-state { padding: 0; }
-.chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }
+.chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; color: var(--subtle); font-size: 12px; }
+.chat-media-transfer-footer { position: absolute; inset: auto 0 5px; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 6px; background: linear-gradient(transparent, #10161deb); color: white; pointer-events: none; }
+.chat-media-transfer-footer small { font-size: 11px; text-shadow: 0 1px 2px #000; }
+.chat-media-transfer-footer button { display: grid; place-items: center; flex: 0 0 28px; height: 28px; padding: 0; border: 0; background: transparent; color: white; cursor: pointer; pointer-events: auto; }
+.chat-media-transfer-footer button svg { filter: drop-shadow(0 1px 2px #000); }
 
 .composer-attachment-preview img, .composer-attachment .composer-video-cover.recording-thumbnail { flex: 0 0 32px; width: 32px; height: 24px; border-radius: 4px; object-fit: cover; }
 
@@ -194,7 +198,7 @@ button.chat-file-summary { cursor: pointer; }
 .chat-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 48px; height: 48px; font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; background: #10161dcc; color: #fff; border-radius: 50%; }
 .chat-inline-image:hover .chat-media-play, .chat-image-open:hover .chat-media-play { background: #252e39ee; }
 .chat-media-placeholder { position: absolute; inset: 0; background: var(--panel-soft); pointer-events: none; }
-:is(.chat-image-frame, .chat-inline-media):has(.chat-media-placeholder) .chat-media-play, .chat-image-download { inset: auto 10px 10px auto; transform: none; width: 36px; height: 36px; }
+.chat-inline-image > .chat-media-placeholder + .chat-media-play:last-child, .chat-image-download { inset: auto 10px 10px auto; transform: none; width: 36px; height: 36px; }
 .chat-image-frame .chat-image-open .chat-image-temporary { width: auto; height: auto; padding: 4px 8px; border-radius: 4px; }
 
 .chat-media-progress { position: absolute; inset: auto 0 0; display: block; width: 100%; pointer-events: none; }

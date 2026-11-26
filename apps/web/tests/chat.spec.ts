@@ -94,6 +94,62 @@ test('长文本输入和清空平滑伸缩，发送后随输入框收起完整�
   }
 });
 
+test('文字等待固定在正文正下方，窄窗连发不遮字或回弹', async ({ page }) => {
+  await mockChatShell(page);
+  await page.setViewportSize({ width: 680, height: 790 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let confirm!: () => void;
+  const gate = new Promise<void>(resolve => { confirm = resolve; });
+  await page.route('**/api/groups**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/groups') return route.fulfill({ json: [group] });
+    if (path.endsWith(groupId)) return route.fulfill({ json: group });
+    if (path.endsWith('/messages')) {
+      if (route.request().method() === 'POST') {
+        const form = await new Response(new Uint8Array(route.request().postDataBuffer()!), {
+          headers: { 'Content-Type': route.request().headers()['content-type'] },
+        }).formData();
+        await gate;
+        return route.fulfill({ json: { ...chatMessage(1), id: form.get('messageId'), content: form.get('content'), createdAt: new Date().toISOString() } });
+      }
+      return route.fulfill({ json: { messages: [], hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  const content = page.locator('.chat-message-content');
+  const label = page.locator('.chat-send-pending');
+  try {
+    await input.fill('最后一行附上链接\nhttps://example.com');
+    await input.press('Enter');
+    const fullLine = await content.evaluate(el => {
+      const context = document.createElement('canvas').getContext('2d')!;
+      context.font = getComputedStyle(el).font;
+      return '字'.repeat(Math.floor(el.clientWidth / context.measureText('字').width));
+    });
+    await input.fill(fullLine);
+    await input.press('Enter');
+    await expect(label).toHaveCount(2);
+    const heights = await content.evaluateAll(rows => rows.map(row => row.clientHeight));
+    const first = (await label.first().boundingBox())!;
+    const bodies = await content.evaluateAll(rows => rows.map(row => {
+      const { x, y, height } = row.getBoundingClientRect();
+      return { x, y, height };
+    }));
+    for (const [index, body] of bodies.entries()) {
+      const hint = (await label.nth(index).boundingBox())!;
+      expect(hint.x).toBeCloseTo(body.x, 0);
+      expect(hint.y).toBeCloseTo(body.y + body.height, 0);
+    }
+    expect(first.y + first.height).toBeLessThanOrEqual(bodies[1].y);
+    confirm();
+    await expect(label).toHaveCount(0);
+    expect(await content.evaluateAll(rows => rows.map(row => row.clientHeight))).toEqual(heights);
+    expect((await content.last().boundingBox())!.y).toBe(bodies[1].y);
+  } finally { confirm(); }
+});
+
 test('首次加载、读取失败和空会话分开反馈，重试共用当前读取流程', async ({ page }) => {
   await mockChatShell(page);
   let release!: () => void;
@@ -1086,18 +1142,20 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(peer.getByText('文件上传中…')).toBeVisible();
     await expect(peer.locator('.chat-inline-media img')).toBeVisible();
-    await expect(page.getByText('正在上传 50%')).toBeVisible();
+    await expect(page.locator('.chat-transfer-media').getByText('50%', { exact: true })).toBeVisible();
+    await expect(page.locator('.chat-media-transfer-footer')).not.toContainText('%');
+    await expect(page.getByRole('button', { name: '取消发送' })).toBeVisible();
     await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', '50');
     await page.evaluate(() => window.dispatchEvent(new Event('resume-test-upload')));
     await expect(page.getByText('正在处理视频…')).toBeVisible();
     await expect(page.getByRole('progressbar', { name: '正在处理视频…' })).not.toHaveAttribute('value');
     const pending = peer.locator('.chat-transfer-media');
-    await expect(pending.locator('.lucide-download')).toBeVisible();
     await expect(pending.getByRole('button')).toHaveCount(0);
     const cover = await pending.locator('.chat-inline-media').boundingBox();
-    const status = await pending.locator('.chat-transfer-state').boundingBox();
-    expect(status!.x).toBeGreaterThanOrEqual(cover!.x + cover!.width);
-    expect(Math.abs(status!.y + status!.height - cover!.y - cover!.height)).toBeLessThanOrEqual(1);
+    const status = await pending.locator('.chat-media-transfer-footer').boundingBox();
+    expect(status!.x).toBeGreaterThanOrEqual(cover!.x);
+    expect(status!.y).toBeGreaterThan(cover!.y);
+    expect(Math.abs(cover!.y + cover!.height - status!.y - status!.height - 5)).toBeLessThanOrEqual(1);
     for (const content of ['后发文字 1', '后发文字 2']) {
       await page.getByLabel('消息内容').fill(content);
       await page.getByLabel('消息内容').press('Enter');

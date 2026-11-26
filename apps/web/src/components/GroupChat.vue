@@ -435,7 +435,7 @@ onScopeDispose(() => {
         </div>
         <template v-for="(message, index) in messages" :key="message.id">
           <div v-if="startsNewDate(message, index)" class="chat-date-divider"><time :datetime="message.createdAt">{{ formatMessageDateDivider(message.createdAt) }}</time></div>
-          <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
+          <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-text': message.type === 'TEXT', 'is-grouped': !startsNewMessageGroup(message, index) }">
             <template v-if="startsNewMessageGroup(message, index)">
               <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
               <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
@@ -443,13 +443,15 @@ onScopeDispose(() => {
             <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
             <div class="chat-message-body">
               <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
-              <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-              <ChatTransferStatus v-if="transfers.outgoing.has(message.id) || message.attachment?.transferStatus"
-                :group-id="group.id" :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
-              <ChatImage v-else-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-                :width="message.attachment.width ?? 420" :height="message.attachment.height ?? 236" :byte-size="message.attachment.byteSize" :alt="`${senderName(message)} 发送的图片`" @preview="blob => previewMedia(message, blob)" />
-              <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment"
-                :video-loading="viewedMedia?.id === message.id && videoPercent !== null" :video-percent="videoPercent ?? undefined" @preview="blob => previewMedia(message, blob)" />
+              <div class="chat-message-main">
+                <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
+                <ChatTransferStatus v-if="transfers.outgoing.has(message.id) || message.attachment?.transferStatus"
+                  :group-id="group.id" :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
+                <ChatImage v-else-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
+                  :width="message.attachment.width ?? 420" :height="message.attachment.height ?? 236" :byte-size="message.attachment.byteSize" :alt="`${senderName(message)} 发送的图片`" @preview="blob => previewMedia(message, blob)" />
+                <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment"
+                  :video-loading="viewedMedia?.id === message.id && videoPercent !== null" :video-percent="videoPercent ?? undefined" @preview="blob => previewMedia(message, blob)" />
+              </div>
             </div>
           </article>
         </template>
