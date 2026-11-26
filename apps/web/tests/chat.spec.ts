@@ -175,7 +175,7 @@ test('首次加载、读取失败和空会话分开反馈，重试共用当前�
     await expect(page.getByText('还没有消息', { exact: true })).toHaveCount(0);
     release();
     await expect(page.locator('.chat-read-error')).toHaveText('消息暂时无法读取');
-    await expect(page.locator('.composer-shell .chat-error')).toHaveCount(0);
+    await expect(page.locator('.chat-error')).toHaveCount(0);
     await page.getByRole('button', { name: '重新读取消息', exact: true }).click();
     await expect(page.getByText('还没有消息', { exact: true })).toBeVisible();
     await expect(page.locator('.chat-read-error')).toHaveCount(0);
@@ -233,7 +233,7 @@ test('向下返回历史才显示回到最新；新消息定位未读且不丢�
   await expect(page.locator('.chat-sync-status')).toHaveCount(1);
   await expect(page.locator('.members-directory .group-error, .members-directory [role="status"]')).toHaveCount(0);
   expect(await page.locator('.composer').boundingBox()).toEqual(composerBounds);
-  await expect(page.locator('.composer-shell .chat-error')).toHaveCount(0);
+  await expect(page.locator('.chat-error')).toHaveCount(0);
   for (const width of [640, 420]) {
     await page.setViewportSize({ width, height: 800 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -927,9 +927,24 @@ test('服主修改单文件上限后，选中文件立即按新限额提示', as
   await expect.poll(() => limits.maxFileBytes).toBe(1024 ** 2);
   await page.locator('form').filter({ has: fileLimit }).screenshot({ path: test.info().outputPath('file-upload-settings.png') });
   await page.reload();
-  await page.locator('input[type=file]').setInputFiles({ name: 'oversize.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2 * 1024 ** 2) });
-  await expect(page.locator('.composer-shell').getByRole('alert')).toContainText('超过单文件上限 1 MiB');
-  await expect(page.locator('.composer-attachment')).toHaveCount(0);
+  const picker = page.locator('input[type=file]');
+  const alert = page.locator('.composer').getByRole('alert');
+  const rejected = { name: '超限.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2 * 1024 ** 2) };
+  const accepted = { name: '笔记.txt', mimeType: 'text/plain', buffer: Buffer.from('示例') };
+  const draft = page.getByRole('textbox', { name: '消息内容' });
+  await draft.fill('一起看这个文件');
+  await picker.setInputFiles(rejected);
+  await expect(alert).toContainText('超过单文件上限 1 MiB');
+  await expect(page.getByRole('button', { name: '移除 超限.bin' })).toHaveCount(0);
+  await picker.setInputFiles(accepted);
+  await expect(alert).toHaveCount(0);
+  await picker.setInputFiles([rejected, { ...rejected, name: '视频.bin' }]);
+  await expect(alert).toContainText('超限.bin');
+  await expect(alert).toContainText('视频.bin');
+  await expect(alert).toHaveCount(0, { timeout: 7000 });
+  await expect(draft).toHaveValue('一起看这个文件');
+  await expect(page.getByRole('button', { name: '移除 笔记.txt' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '发送消息' })).toBeEnabled();
   expect(uploads).toBe(0);
 });
 
@@ -1002,7 +1017,7 @@ test('加号多选可勾选原件并按顺序发送，图片作为文件并只�
   await page.locator('.composer').screenshot({ path: test.info().outputPath('compact-attachments.png') });
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('.chat-file-media')).toHaveCount(2);
-  expect(uploaded.map((item) => item.name)).toEqual(['原图.png', '资料.dat']);
+  await expect.poll(() => uploaded.map((item) => item.name)).toEqual(['原图.png', '资料.dat']);
   expect(uploaded.map((item) => [...item.bytes])).toEqual([[...originalPng], [9, 8, 7]]);
   expect(uploaded.map((item) => item.content)).toEqual(['附在第一条', '']);
   await expect(page.locator('.chat-file-media')).toHaveCount(2);
@@ -1299,7 +1314,7 @@ test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', as
   await expect(page.locator('.composer-attachment')).toHaveCount(2);
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('.chat-file-card').filter({ hasText: 'second.bin' })).toHaveCount(1);
-  expect(order).toEqual(['image', 'second.bin']);
+  await expect.poll(() => order).toEqual(['image', 'second.bin']);
   await expect(page.locator('.chat-message-content').last()).toHaveText('说明');
 });
 

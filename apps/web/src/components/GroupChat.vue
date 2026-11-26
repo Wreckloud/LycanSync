@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import '../chat/chat.css';
-import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { useChatScroll } from '../chat/useChatScroll';
 import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
+import { ArrowDown, LoaderCircle, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
 import { uploadLimits, type ChatMessage } from '../chat/chatApi';
@@ -25,8 +25,10 @@ import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
 import DialogTransition from './DialogTransition.vue';
 
 type PendingAttachment = DraftAttachment & {
+  preparing: boolean;
   originalFile?: File; optimizedImage?: File; sendOriginal?: boolean; originalLimit?: number; imageError?: boolean;
   thumbnailRequest?: AbortController;
+  originalSizeError?: string;
 };
 type MessageSegment = { text: string; href?: string };
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
@@ -72,8 +74,10 @@ const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
 const transfers = inject(CHAT_TRANSFERS)!;
 const selection = new AbortController();
-const preparing = ref(false);
-const error = ref('');
+const preparing = computed(() => pendingAttachments.value.some(item => item.preparing));
+const linkError = ref('');
+const attachmentErrors = ref<string[]>([]);
+let attachmentErrorTimer: ReturnType<typeof setTimeout> | undefined;
 const calendarNow = ref(new Date());
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
@@ -125,12 +129,30 @@ function retrySync() {
 }
 const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
 const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
-const canSend = computed(() => !preparing.value && (text.value.trim().length > 0 || pendingAttachments.value.length > 0));
+const attachmentPreparingHint = useLoadingHint(() => preparing.value);
+const canSend = computed(() => !preparing.value && !pendingAttachments.value.some(item => item.imageError && !item.sendOriginal)
+  && (text.value.trim().length > 0 || pendingAttachments.value.length > 0));
 
-function allowedSize(file: Pick<File, 'name' | 'size'>, limit: number) {
-  if (file.size <= limit) return true;
-  error.value = file.name + '（' + formatAttachmentSize(file.size) + '）超过单文件上限 ' + formatAttachmentSize(limit);
-  return false;
+function sizeError(file: Pick<File, 'name' | 'size'>, limit: number) {
+  return file.size <= limit ? '' : file.name + '（' + formatAttachmentSize(file.size) + '）超过单文件上限 ' + formatAttachmentSize(limit);
+}
+
+function clearAttachmentErrors() {
+  clearTimeout(attachmentErrorTimer);
+  attachmentErrors.value = [];
+}
+
+function scheduleAttachmentErrorDismissal() {
+  clearTimeout(attachmentErrorTimer);
+  if (attachmentErrors.value.length && document.visibilityState === 'visible') {
+    attachmentErrorTimer = setTimeout(clearAttachmentErrors, 5000);
+  }
+}
+
+function rejectAttachment(item: PendingAttachment, message: string) {
+  removePendingAttachment(item.id);
+  attachmentErrors.value.push(message);
+  scheduleAttachmentErrorDismissal();
 }
 
 function revokePreview(item: PendingAttachment) {
@@ -168,56 +190,71 @@ function removePendingAttachment(id: string) {
   pendingAttachments.value = pendingAttachments.value.filter((attachment) => attachment.id !== id);
 }
 
-async function enqueueFiles(files: File[], sendAsImageMessage: boolean) {
-  if (preparing.value || !files.length) return;
-  preparing.value = true;
-  error.value = '';
-  const preparedItems: PendingAttachment[] = [];
+let limitsRequest: ReturnType<typeof uploadLimits> | undefined;
+let imagePreparation = Promise.resolve();
+
+async function prepareAttachment(item: PendingAttachment) {
+  pendingAttachments.value.push(item);
   try {
-    const { maxFileBytes } = await uploadLimits(selection.signal);
-    if (disposed) return;
-    for (const file of files) {
-      const imageType = file.type === 'image/png' || file.type === 'image/jpeg';
-      const format = chatMediaFormat({ id: '', byteSize: file.size, fileName: file.name, contentType: file.type });
-      let optimizedImage: File | undefined;
-      let imageError = false;
-      if (imageType) {
+    limitsRequest ??= uploadLimits(selection.signal).finally(() => { limitsRequest = undefined; });
+    const { maxFileBytes } = await limitsRequest;
+    if (!pendingAttachments.value.includes(item)) return;
+    item.originalLimit = maxFileBytes;
+    const original = item.originalFile;
+    if (original) {
+      // 大图逐张解码，后加入的普通文件可以先就绪。
+      imagePreparation = imagePreparation.then(async () => {
+        if (!pendingAttachments.value.includes(item)) return;
         try {
-          const image = await compressChatImage(file);
-          optimizedImage = new File([image], file.name, { type: image.type });
+          const optimized = await compressChatImage(original);
+          if (!pendingAttachments.value.includes(item)) return;
+          item.optimizedImage = new File([optimized], original.name, { type: optimized.type });
+          item.file = item.optimizedImage;
         } catch {
-          // 压缩失败仍允许用户选择原件。
-          imageError = true;
+          item.imageError = true;
         }
-      }
-      const prepared = optimizedImage ?? file;
-      if (!allowedSize(prepared, maxFileBytes)) continue;
-      preparedItems.push({ id: crypto.randomUUID(), kind: imageType && sendAsImageMessage ? 'IMAGE' : 'FILE',
-        file: prepared, originalFile: imageType ? file : undefined, optimizedImage, imageError, originalLimit: maxFileBytes,
-        sendOriginal: imageType || format?.kind === 'video' ? false : undefined,
-        previewUrl: format ? URL.createObjectURL(prepared) : '' });
-      if (disposed) {
-        for (const item of preparedItems) revokePreview(item);
-        return;
-      }
+      });
+      await imagePreparation;
+      if (!pendingAttachments.value.includes(item)) return;
     }
-    pendingAttachments.value.push(...preparedItems);
-    for (const item of preparedItems) prepareThumbnail(item);
+    const tooLarge = sizeError(item.file, maxFileBytes);
+    if (tooLarge) {
+      rejectAttachment(item, tooLarge);
+      return;
+    }
+    if (item.recordingId !== undefined) {
+      item.previewUrl = `lycan://app/recordings/${encodeURIComponent(item.recordingId)}`;
+    } else if (attachmentKind(item)) {
+      item.previewUrl = URL.createObjectURL(item.file);
+      prepareThumbnail(item);
+    }
+    item.preparing = false;
   } catch (reason) {
-    for (const item of preparedItems) revokePreview(item);
-    if (!disposed) error.value = reason instanceof Error ? reason.message : '添加附件失败';
-  } finally {
-    preparing.value = false;
+    if (!pendingAttachments.value.includes(item)) return;
+    rejectAttachment(item, item.file.name + '：' + (reason instanceof Error ? reason.message : '添加附件失败'));
   }
 }
 
+async function enqueueFiles(files: File[], sendAsImageMessage: boolean) {
+  if (!files.length) return;
+  clearAttachmentErrors();
+  await Promise.all(files.map(file => {
+    const image = file.type === 'image/png' || file.type === 'image/jpeg';
+    const item = reactive<PendingAttachment>({ id: crypto.randomUUID(), kind: image && sendAsImageMessage ? 'IMAGE' : 'FILE',
+      file, originalFile: image ? file : undefined, previewUrl: '', preparing: true });
+    if (image || attachmentKind(item) === 'video') item.sendOriginal = false;
+    return prepareAttachment(item);
+  }));
+}
+
 function selectOriginal(item: PendingAttachment, event: Event) {
+  clearAttachmentErrors();
   const input = event.target as HTMLInputElement;
-  if (input.checked && item.originalFile && !allowedSize(item.originalFile, item.originalLimit!)) {
+  item.originalSizeError = input.checked && item.originalFile ? sizeError(item.originalFile, item.originalLimit!) : '';
+  if (item.originalSizeError) {
     input.checked = false;
     return;
   }
-  error.value = '';
   item.sendOriginal = input.checked;
   if (item.originalFile && item.optimizedImage) {
     revokePreview(item);
@@ -235,19 +272,14 @@ function attachmentInfo(item: PendingAttachment) {
 function attachmentKind(item: PendingAttachment) { return chatMediaFormat(attachmentInfo(item))?.kind; }
 watch(() => props.recordingAttachment, async entry => {
   if (!entry) return;
+  clearAttachmentErrors();
   emit('recordingConsumed');
-  try {
-    const { maxFileBytes } = await uploadLimits(selection.signal);
-    if (disposed || !allowedSize({ name: entry.fileName || '录像', size: entry.bytes! }, maxFileBytes)) return;
-  } catch (reason) {
-    if (!disposed) error.value = reason instanceof Error ? reason.message : '无法检查录像大小';
-    return;
-  }
-  const source = `lycan://app/recordings/${encodeURIComponent(entry.id)}`;
-  pendingAttachments.value.push({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
+  const item = reactive<PendingAttachment>({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
     file: { name: entry.fileName || `${entry.applicationName || '录像'}.mkv`, size: entry.bytes! },
-    previewUrl: source, sendOriginal: false });
-  void nextTick(() => { resizeMessageInput(); messageInput.value?.focus(); });
+    previewUrl: '', sendOriginal: false, preparing: true });
+  await prepareAttachment(item);
+  await nextTick();
+  if (pendingAttachments.value.includes(item)) { resizeMessageInput(); messageInput.value?.focus(); }
 }, { immediate: true });
 
 function chooseFiles(event: Event) {
@@ -280,15 +312,14 @@ function handleKeydown(event: KeyboardEvent) {
 
 async function submit(restoreFocus = false) {
   if (!canSend.value) return;
-  const invalid = pendingAttachments.value.find(item => item.imageError && !item.sendOriginal);
-  if (invalid) { error.value = invalid.file.name + ' 无法优化，勾选“发送原文件”后可发送。'; return; }
   const queued = pendingAttachments.value;
   const content = text.value;
   const groupId = props.group.id;
   pendingAttachments.value = [];
   pendingPreview.value = null;
   text.value = '';
-  error.value = '';
+  clearAttachmentErrors();
+  linkError.value = '';
   if (queued.length) queued.forEach((draft, index) => {
     draft.thumbnailRequest?.abort();
     const attachment: DraftAttachment = draft.recordingId !== undefined
@@ -365,7 +396,7 @@ function safeHttpUrl(value: string) {
 
 function openLink(url: string) {
   if (window.lycanDesktop) {
-    void window.lycanDesktop.openExternal(url).catch(() => { error.value = '无法打开默认浏览器。'; });
+    void window.lycanDesktop.openExternal(url).catch(() => { linkError.value = '无法打开默认浏览器。'; });
     return;
   }
   window.open(url, '_blank', 'noopener,noreferrer');
@@ -378,6 +409,7 @@ function refreshOnActivation() {
 }
 
 function handleVisibilityChange() {
+  scheduleAttachmentErrorDismissal();
   if (document.visibilityState === 'hidden') {
     if (calendarTimer) clearTimeout(calendarTimer);
     calendarTimer = null;
@@ -395,6 +427,7 @@ onMounted(() => {
 onScopeDispose(() => {
   // 切群清理草稿和本群订阅；已提交的任务由账号持有。
   disposed = true;
+  clearTimeout(attachmentErrorTimer);
   closeHistoricalProfile();
   if (calendarTimer) clearTimeout(calendarTimer);
   window.removeEventListener('focus', refreshOnActivation);
@@ -413,7 +446,7 @@ onScopeDispose(() => {
         <span>{{ syncError }}</span><button type="button" class="chat-retry" :disabled="refreshing" @click="retrySync">{{ refreshing ? '重试中…' : '重试' }}</button>
       </div>
     </div>
-    <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
+    <div class="chat-timeline">
       <div :ref="scroll.list" class="message-list" :class="{ 'group-content-ready': initialLoaded }"
         @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow"
         @keydown="['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes($event.key) && cancelScrollFollow()">
@@ -456,20 +489,24 @@ onScopeDispose(() => {
           </article>
         </template>
       </div>
-      <Transition name="surface-panel">
-        <button v-if="showMessageJump && messages.length" type="button" class="chat-jump" :aria-label="messageJumpLabel" @click="jumpToMessages">
-          <ArrowDown :size="13" /><span>{{ messageJumpLabel }}</span>
-        </button>
-      </Transition>
+      <div class="chat-timeline-actions">
+        <div v-if="linkError" class="chat-error">
+          <span role="alert">{{ linkError }}</span>
+          <button type="button" class="chat-retry" aria-label="关闭提示" @click="linkError = ''"><X :size="14" /></button>
+        </div>
+        <Transition name="surface-panel">
+          <button v-if="showMessageJump && messages.length" type="button" class="chat-jump" :aria-label="messageJumpLabel" @click="jumpToMessages">
+            <ArrowDown :size="13" /><span>{{ messageJumpLabel }}</span>
+          </button>
+        </Transition>
+      </div>
     </div>
     <div class="composer-shell">
-      <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <form class="composer" @submit.prevent="submit()">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
-        <button type="button" aria-label="添加文件" :disabled="preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
+        <button type="button" aria-label="添加文件" @click="fileInput?.click()"><Plus :size="16" /></button>
         <div ref="composerViewport" class="composer-content">
           <div ref="composerContent">
-            <div v-if="preparing" class="chat-transfer-state" role="status">正在准备附件…</div>
             <div v-if="pendingAttachments.length" class="composer-attachments">
               <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
                 <button type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
@@ -479,15 +516,25 @@ onScopeDispose(() => {
                 </button>
                 <small>{{ formatAttachmentSize(item.file.size) }}</small>
                 <label v-if="item.sendOriginal !== undefined" class="composer-original">
-                  <input type="checkbox" :checked="item.sendOriginal" @change="selectOriginal(item, $event)" />发送原文件
+                  <input type="checkbox" :disabled="item.preparing" :checked="item.sendOriginal" @change="selectOriginal(item, $event)" />发送原文件
                 </label>
-                <button type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
+                <button type="button" :aria-label="`移除 ${item.file.name}`" @click="clearAttachmentErrors(); removePendingAttachment(item.id)"><X :size="13" /></button>
+                <span v-if="item.originalSizeError || (item.imageError && !item.sendOriginal)" class="composer-attachment-error" role="alert">{{ item.originalSizeError || '图片无法优化，勾选「发送原文件」后可发送。' }}</span>
               </div>
+            </div>
+            <div v-if="attachmentErrors.length" class="composer-attachment composer-add-error">
+              <div role="alert">
+                <div v-for="(message, index) in attachmentErrors" :key="index">{{ message }}</div>
+              </div>
+              <button type="button" aria-label="关闭添加失败提示" @click="clearAttachmentErrors"><X :size="13" /></button>
             </div>
             <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
           </div>
         </div>
-        <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
+        <button type="submit" aria-label="发送消息" :disabled="!canSend" :aria-busy="preparing" :title="attachmentPreparingHint ? '正在准备附件…' : undefined">
+          <LoaderCircle v-if="attachmentPreparingHint" class="chat-pending-icon" :size="15" aria-hidden="true" />
+          <Send v-else :size="15" />
+        </button>
       </form>
     </div>
     <ProfilePopover :anchor="historicalAnchor" :profile-key="historicalSender?.senderUserId" placement="left" label="历史成员资料"

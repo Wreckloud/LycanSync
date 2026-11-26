@@ -60,14 +60,15 @@ function setup(cache: AccountCache | null = null) {
   vi.stubGlobal('fetch', fetchRecording);
   const transfers = createChatTransfers({ ...props.user, avatar: '', administrator: false }, id => emit('messageSent', id));
   const uploadLimits = vi.fn(async () => ({ maxFileBytes: 512 * 1024 ** 2 }));
+  const compressChatImage = vi.fn(async (file: File) => file);
   const chatUploadImageThumbnail = vi.fn<(_file: File, _signal: AbortSignal) => Promise<string | undefined>>().mockResolvedValue(undefined);
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, enqueueFiles, attachmentKind, pendingPreview,
-    text, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar, messageInput,
+    text, attachmentErrors, syncError, retrySync, pendingAttachments, removePendingAttachment, canSend, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar, messageInput,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
-    computed, ref, watch, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
+    computed, reactive, ref, watch, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: (key: symbol) => key === CHAT_TRANSFERS ? transfers : cache, CHAT_TRANSFERS, ACCOUNT_CACHE: Symbol(), uploadLimits,
-    sendMessage, sendFile, compressChatImage: vi.fn(), chatUploadImageThumbnail, defaultAvatar,
+    sendMessage, sendFile, File, compressChatImage, chatUploadImageThumbnail, defaultAvatar,
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, ReadableStream, crypto, fetch: fetchRecording, setTimeout, clearTimeout, Error, Date, chatMediaFormat, formatAttachmentSize,
     document, window, scrollPreference, useChatScroll, useGroupMessages, URL: { revokeObjectURL: vi.fn(), createObjectURL: vi.fn(() => 'blob:preview') },
@@ -90,11 +91,12 @@ function setup(cache: AccountCache | null = null) {
     scrollToBottom(behavior?: ScrollBehavior, force?: boolean): Promise<void>; onScrollEnd(): void;
     onWheel(event: WheelEvent): void; stopAnimatedScroll(): void;
     setScrollPreference(value: { matches: boolean; removeEventListener: ReturnType<typeof vi.fn> }): void;
-    messages: { value: ChatMessage[] }; text: { value: string }; error: { value: string };
+    messages: { value: ChatMessage[] }; text: { value: string }; attachmentErrors: { value: string[] };
+    canSend: { value: boolean }; removePendingAttachment(id: string): void;
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
-      state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
+      preparing: boolean }> };
   };
-  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit, transfers, uploadLimits, chatUploadImageThumbnail };
+  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit, transfers, uploadLimits, compressChatImage, chatUploadImageThumbnail };
 }
 
 it.each([false, true])('只随文件登记发送已经生成的封面，后发文字保持顺序（就绪 %s）', async ready => {
@@ -569,7 +571,7 @@ it('超限文件在读取文件流前提示 MiB，其他合法附件仍可添加
   try {
     f.uploadLimits.mockResolvedValue({ maxFileBytes: 1024 ** 2 });
     await f.chat.enqueueFiles([new File([new Uint8Array(1024 ** 2 + 1)], 'large.bin'), new File(['ok'], 'ok.txt')], false);
-    expect(f.chat.error.value).toContain('上限 1 MiB');
+    expect(f.chat.attachmentErrors.value[0]).toContain('上限 1 MiB');
     expect(f.chat.pendingAttachments.value.map(item => item.file.name)).toEqual(['ok.txt']);
     expect(f.sendFile).not.toHaveBeenCalled();
   } finally { f.scope.stop(); }
@@ -767,7 +769,7 @@ it('群聊接收录像只加入附件并保留文字，点击发送才读取上�
     f.props.recordingAttachment = { id: 'recording-id', sessionId: 'session', createdAt: 1,
       durationMs: 2000, width: 100, height: 100, bytes: 42, state: 'saved', availability: 'available', fileName: '饥荒联机版.mkv' };
     await nextTick();
-    await vi.waitFor(() => expect(f.chat.pendingAttachments.value).toHaveLength(1));
+    await vi.waitFor(() => expect(f.chat.pendingAttachments.value[0]?.preparing).toBe(false));
     expect(f.chat.pendingAttachments.value[0]!.file.name).toBe('饥荒联机版.mkv');
     expect(f.chat.text.value).toBe('原有草稿');
     expect(f.sendFile).not.toHaveBeenCalled();
@@ -797,6 +799,86 @@ it('加号附件按图片视频音频分类，普通文件不建立预览 URL', 
     expect(f.sendFile).not.toHaveBeenCalled();
   } finally { f.scope.stop(); }
 });
+
+it('附件被拒后切到后台，返回群聊仍有完整阅读时间', async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  try {
+    f.uploadLimits.mockResolvedValue({ maxFileBytes: 1 });
+    await f.chat.enqueueFiles([new File(['abc'], '笔记.txt')], false);
+    await vi.advanceTimersByTimeAsync(4000);
+    f.document.visibilityState = 'hidden';
+    f.chat.handleVisibilityChange();
+    await vi.advanceTimersByTimeAsync(6000);
+    f.document.visibilityState = 'visible';
+    f.chat.handleVisibilityChange();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(f.chat.attachmentErrors.value[0]).toContain('笔记.txt');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.chat.attachmentErrors.value).toEqual([]);
+  } finally { f.scope.stop(); vi.useRealTimers(); }
+});
+
+it.each([false, true])('连续添加立即按顺序展示，共用进行中的限额查询（失败 %s）', async failed => {
+  const f = setup();
+  const limits = deferred<{ maxFileBytes: number }>();
+  f.uploadLimits.mockReturnValueOnce(limits.promise);
+  const first = new File(['first'], 'first.txt');
+  const second = new File(['second'], 'second.txt');
+  try {
+    const preparing = f.chat.enqueueFiles([first], false);
+    const appended = f.chat.enqueueFiles([second], true);
+    expect(f.chat.pendingAttachments.value.map(item => item.file.name)).toEqual(['first.txt', 'second.txt']);
+    expect(f.chat.canSend.value).toBe(false);
+    expect(f.uploadLimits).toHaveBeenCalledOnce();
+
+    if (failed) limits.reject(new Error('无法读取上传限额'));
+    else limits.resolve({ maxFileBytes: 1024 });
+    await Promise.all([preparing, appended]);
+    expect(f.chat.canSend.value).toBe(!failed);
+    expect(f.chat.attachmentErrors.value).toEqual(failed ? ['first.txt：无法读取上传限额', 'second.txt：无法读取上传限额'] : []);
+    expect(f.chat.pendingAttachments.value.map(item => item.file.name)).toEqual(failed ? [] : ['first.txt', 'second.txt']);
+
+    await f.chat.enqueueFiles([second], true);
+    expect(f.chat.pendingAttachments.value.at(-1)?.file.name).toBe('second.txt');
+  } finally { f.scope.stop(); }
+});
+
+it.each(['完成', '移除', '切群'])('普通文件独立就绪，大图%s后按保留的附件顺序发送', async outcome => {
+  const f = setup();
+  const image = new File(['test'], 'image.png', { type: 'image/png' });
+  const slow = deferred<File>();
+  f.compressChatImage.mockReturnValueOnce(slow.promise);
+  const preparing = f.chat.enqueueFiles([image], false);
+  try {
+    await vi.waitFor(() => expect(f.compressChatImage).toHaveBeenCalledOnce());
+    await f.chat.enqueueFiles([new File(['text'], 'notes.txt')], false);
+    const items = f.chat.pendingAttachments.value;
+    expect(items.map(item => item.preparing)).toEqual([true, false]);
+    f.chat.text.value = '草稿';
+    await f.chat.submit();
+    expect(f.chat.text.value).toBe('草稿');
+    if (outcome === '切群') f.scope.stop();
+    if (outcome === '移除') {
+      f.chat.removePendingAttachment(items[0].id);
+      expect(f.chat.canSend.value).toBe(true);
+      await f.chat.submit();
+    }
+    slow.resolve(image);
+    await preparing;
+    if (outcome === '切群') {
+      expect(f.chat.pendingAttachments.value).toHaveLength(0);
+      expect(f.chatUploadImageThumbnail).not.toHaveBeenCalled();
+    } else {
+      if (outcome === '完成') await f.chat.submit();
+      const names = outcome === '完成' ? ['image.png', 'notes.txt'] : ['notes.txt'];
+      await vi.waitFor(() => expect(f.sendFile.mock.calls.map(call => call[1].name)).toEqual(names));
+      expect(f.sendFile.mock.calls[0][2]).toBe('草稿');
+      expect(f.chat.pendingAttachments.value).toHaveLength(0);
+    }
+  } finally { slow.resolve(image); f.scope.stop(); }
+});
+
 it('回车发送结束等输入框恢复可用后聚焦，发送失败仍可继续编辑', async () => {
   for (const failed of [false, true]) {
     const f = setup();
