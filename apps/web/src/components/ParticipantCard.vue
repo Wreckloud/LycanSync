@@ -92,7 +92,6 @@ const remoteAudioLabel = computed(() => {
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
 const focusedPreview = computed(() => selectable.value && props.focused);
-const selectHint = computed(() => props.watchingElsewhere ? '打开观看窗口' : focusedPreview.value ? '已聚焦' : '聚焦共享画面');
 const fullscreenAvailable = computed(() => Boolean(ownerDocument.value?.fullscreenEnabled || ownerDocument.value?.defaultView?.lycanViewerWindow));
 const viewingQuality = computed(() => props.viewQuality ?? (props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW));
 
@@ -254,11 +253,10 @@ onBeforeUnmount(() => {
 <template>
   <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': variant === 'card' && speaking }]"
     :data-testid="variant === 'viewer' ? 'viewer-screen' : 'participant-card'">
-    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed, 'is-focused-preview': focusedPreview }"
+    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
       :aria-label="selectable ? watchingElsewhere ? '打开观看窗口' : '观看' + media.name + '的共享画面' : undefined"
       :aria-describedby="selectable && showAudioStatus ? audioStatusId : undefined"
-      :data-select-hint="selectable ? selectHint : undefined"
       @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
       @blur="releaseHeldRemoteInputs"
@@ -266,7 +264,7 @@ onBeforeUnmount(() => {
       @pointercancel="releaseHeldRemoteInputs" @wheel="remoteWheel"
       @contextmenu="remoteControlActive && $event.preventDefault()">
       <span v-if="privateControl" class="video-placeholder private-control-placeholder" role="status">{{ privateControl }}<small>画面未公开</small></span>
-      <span v-else-if="focusedPreview" class="video-placeholder focused-preview-placeholder" role="status">{{ watchingElsewhere ? '已在观看窗口聚焦' : '已聚焦' }}</span>
+      <span v-else-if="focusedPreview" class="video-placeholder" role="status">{{ watchingElsewhere ? '已在观看窗口聚焦' : '已聚焦' }}</span>
       <template v-else-if="media.sharing">
         <video v-if="previewMounted" ref="videoElement" :class="{ 'is-video-ready': videoReady }" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
         <span v-if="previewMounted && (!videoReady || !media.track || media.muted)" class="video-placeholder">等待共享画面…</span>
@@ -332,5 +330,4 @@ onBeforeUnmount(() => {
 .recording-indicator svg { color: var(--danger); flex-shrink: 0; }
 .private-control-placeholder { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 12px; text-align: center; }
 .private-control-placeholder small { font-size: 12px; }
-.is-focused-preview:hover .focused-preview-placeholder, .is-focused-preview:focus-visible .focused-preview-placeholder { visibility: hidden; }
 </style>

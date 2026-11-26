@@ -483,19 +483,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .participant-media.is-selectable { cursor: pointer; }
 .participant-media.is-remote-control { cursor: default; touch-action: none; }
-.participant-media.is-selectable:hover::after,
-.participant-media.is-selectable:focus-visible::after {
-  content: attr(data-select-hint);
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: #05080d99;
-  color: var(--text);
-  font-size: 13px;
-  pointer-events: none;
-}
 
 .participant-meta {
   position: relative;

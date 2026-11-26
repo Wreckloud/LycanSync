@@ -3,12 +3,14 @@ import { motionDurationMs } from '../styles/motion';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
-import { ArrowLeft, ChevronDown, ExternalLink, Grid2X2, Focus, Maximize, Minimize, X } from '@lucide/vue';
+import { ArrowLeft, ChevronDown, ExternalLink, Grid2X2, Focus, Maximize, Minimize, Volume2, VolumeX, X } from '@lucide/vue';
 import { VideoQuality, type Room } from 'livekit-client';
 import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShareLayout';
 import { useViewingSize } from '../viewing/useViewingSize';
 import ParticipantCard from './ParticipantCard.vue';
-import ConnectionSignal from './ConnectionSignal.vue';
+import MemberVolumeButton from './MemberVolumeButton.vue';
+import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
+import { screenAudioPublication } from '../rtc/applicationAudio';
 import ViewingConnectionStatus from './ViewingConnectionStatus.vue';
 import HorizontalScroll from './HorizontalScroll.vue';
 import { observeWindowLayoutRestore } from '../viewing/windowLayoutRestore';
@@ -21,6 +23,7 @@ const props = withDefaults(defineProps<{
   snapshot?: MediaDiagnosticsSnapshot | null;
   avatar: (identity: string) => string;
   listening: boolean;
+  shareVolume: (identity: string) => number;
   privateControl: (identity: string) => string;
   active?: boolean;
   videoActive?: boolean;
@@ -30,7 +33,8 @@ const props = withDefaults(defineProps<{
   stageHidden?: boolean;
   reconnecting: boolean;
 }>(), { active: true, videoActive: true });
-const emit = defineEmits<{ detach: []; return: []; 'update:folded': [folded: boolean]; 'update:stageHidden': [hidden: boolean]; notice: [message: string] }>();
+const emit = defineEmits<{ detach: []; return: []; 'update:folded': [folded: boolean]; 'update:stageHidden': [hidden: boolean]; notice: [message: string];
+  toggleShareAudio: [identity: string]; changeShareVolume: [identity: string, volume: number] }>();
 const panel = ref<HTMLElement | null>(null);
 const ratios = ref<Record<number, number>>({});
 const framing = ref(false);
@@ -320,6 +324,7 @@ function select(share: ViewedShare) {
 
 let lastLayoutWheelAt = -Infinity;
 function layoutWheel(event: WheelEvent) {
+  if ((event.target as Element).closest('.volume-button')) return;
   if (event.ctrlKey || event.metaKey || event.deltaY <= 0 || Math.abs(event.deltaX) >= event.deltaY) return;
   const now = performance.now();
   if (now - lastLayoutWheelAt >= 160) {
@@ -418,7 +423,6 @@ onScopeDispose(() => {
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
               :aria-label="focus ? '放大聚焦画面' : '聚焦' + share.participant.name"
-              :title="focus ? '隐藏成员并放大画面' : '点击聚焦共享画面'"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"
                 :view-active="videoActive"
@@ -428,18 +432,23 @@ onScopeDispose(() => {
                 :private-control="privateControl(share.participant.identity)" :view-quality="quality"
                 @video-size="videoSize(share.key, $event)" @notice="emit('notice', $event)" />
             </div>
+            <slot v-if="focus" name="control" :identity="share.participant.identity" />
             <div class="viewing-actions">
-              <span class="viewing-caption" :title="share.participant.name"><span>{{ share.participant.name || share.participant.identity }}</span>
+              <span class="viewing-caption"><span :title="share.participant.name">{{ share.participant.name || share.participant.identity }}</span>
                 <time aria-label="本次共享时长">{{ elapsed(share) }}</time>
-                <ViewingConnectionStatus v-if="detached" :participant="share.participant" :local="share.participant === room?.localParticipant"
+                <ViewingConnectionStatus v-if="detached || share.participant !== room?.localParticipant" :compact="!detached" :participant="share.participant" :local="share.participant === room?.localParticipant"
                   :revision="revision" :snapshot="snapshot" :active="videoActive && !folded && !reconnecting" />
-                <span v-else-if="share.participant !== room?.localParticipant" class="viewing-connection"><ConnectionSignal :quality="share.participant.connectionQuality" /></span>
               </span>
               <button v-if="focus && !view.expanded" type="button" class="viewing-expand-members"
                 :aria-label="view.membersVisible ? '收起成员' : '展开成员'" :aria-expanded="view.membersVisible"
                 @click="toggleMembers"><ChevronDown :size="16" /></button>
               <div class="viewing-action-buttons">
-                <slot v-if="focus" name="control" :identity="share.participant.identity" />
+                <MemberVolumeButton v-if="focus && listening && share.participant !== room?.localParticipant && screenAudioPublication(share.participant)?.track"
+                  :volume="shareVolume(share.participant.identity)" :max="SHARE_VOLUME_MAX"
+                  :label="shareVolume(share.participant.identity) ? '静音这路共享声音' : '恢复这路共享声音'"
+                  @toggle="emit('toggleShareAudio', share.participant.identity)" @change="emit('changeShareVolume', share.participant.identity, $event)">
+                  <Volume2 v-if="shareVolume(share.participant.identity)" :size="15" /><VolumeX v-else :size="15" />
+                </MemberVolumeButton>
                 <button type="button" :aria-label="focus ? '查看全部共享画面' : '返回聚焦画面'"
                   :title="focus ? '点击查看全部共享画面' : '返回聚焦画面'" :disabled="!focus && !view.focusedShare"
                   @click="focus ? view.grid() : view.focusedShare && view.select(view.focusedShare.participant.identity)">

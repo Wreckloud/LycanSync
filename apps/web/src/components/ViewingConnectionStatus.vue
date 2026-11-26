@@ -6,9 +6,16 @@ import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import { readTransportFeedback, readVideoLayers, type VideoLayerStats } from '../rtc/mediaStats';
 
 const props = defineProps<{ participant: Participant; revision: number; active: boolean; local: boolean;
-  voiceTrack?: Track; snapshot?: MediaDiagnosticsSnapshot | null }>();
+  compact?: boolean; voiceTrack?: Track; snapshot?: MediaDiagnosticsSnapshot | null }>();
 const indicator = ref<HTMLElement | null>(null);
 const latency = ref<number>();
+const picture = ref('');
+const hovered = ref(false);
+const focused = ref(false);
+const detail = computed(() => [
+  '本机到媒体服务器往返：' + (latency.value === undefined ? '暂无数据' : latency.value + ' ms'),
+  picture.value,
+].filter(Boolean).join('\n'));
 const visible = ref(false);
 let observer: IntersectionObserver | undefined;
 let page: Document | undefined;
@@ -34,10 +41,11 @@ const quality = computed(() => {
 });
 watch(() => {
   void props.revision;
-  if (!props.active || !visible.value) return;
+  if (!props.active || !visible.value || (props.compact && !hovered.value && !focused.value)) return;
   return props.participant.getTrackPublication(Track.Source.ScreenShare)?.track ?? props.voiceTrack;
 }, (track, _, cleanup) => {
   latency.value = undefined;
+  picture.value = '';
   if (!track) return;
   const previous: Parameters<typeof readVideoLayers>[2] = new Map();
   const trackId = track.mediaStreamTrack?.id;
@@ -71,11 +79,14 @@ watch(() => {
       }
       if (stopped) return;
       const layer = layers.find(item => (item.bitrateKbps ?? 0) > 0) ?? layers[0];
+      const metrics = layer && [layer.size === '未知' ? '' : layer.size, layer.fps == null ? '' : layer.fps + ' fps'].filter(Boolean).join(' · ');
+      picture.value = metrics ? (props.local ? '发送画面：' : '接收画面：') + metrics : '';
       if (layer?.transportRoundTripMs != null) {
         latency.value = layer.transportRoundTripMs;
         lastLatencyAt = stream ? time : Date.now();
       }
     } catch {
+      if (!stopped) picture.value = '';
       // 暂留最近一次有效采样，超过有效期时统一清空。
     } finally {
       if (!stopped) {
@@ -89,9 +100,10 @@ watch(() => {
 </script>
 
 <template>
-  <span ref="indicator" class="viewing-connection">
-    <ConnectionSignal :quality="quality" />
-    <span class="latency">{{ latency === undefined ? '—' : latency + ' ms' }}</span>
+  <span ref="indicator" class="viewing-connection" @pointerenter="hovered = true" @pointerleave="hovered = false"
+    @focusin="focused = true" @focusout="focused = false">
+    <ConnectionSignal :quality="quality" :subject="local ? '我的' : '主播'" :detail="detail" />
+    <span v-if="!compact" class="latency">{{ latency === undefined ? '—' : latency + ' ms' }}</span>
   </span>
 </template>
 

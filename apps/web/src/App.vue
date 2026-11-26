@@ -821,7 +821,7 @@ const remoteControlPlaceholder = (identity: string) => {
 const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
 const controlActionLabel = (identity: string) => remoteControlIsActive(identity) ? '退出远程控制'
-  : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制';
+  : remoteControlIsPending(identity) ? '取消远程控制申请' : '请求远程控制';
 // 测试期的客户端软限制，不代表服务端并发容量；后续按实测逐步移除。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
 watch(() => [joinedGroupId.value, joiningGroupId.value, rtc.status, rtc.room], () => {
@@ -1356,15 +1356,16 @@ function participantListening(participant: Participant) {
       :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
       :inline-target="viewingTarget" :inline-visible="mainWindowVisible && !settingsPresented"
       :avatar="participantAvatar" :muted-shares="mutedShares"
+      :share-volume="shareVolume" @change-share-volume="updateSharedVolume"
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
       <template #control="{ identity }">
         <button v-if="identity !== localParticipant?.identity && remoteControlCanRequest(identity)" type="button"
           class="viewing-control-action" :class="{ 'is-engaged': remoteControlIsActive(identity) || remoteControlIsPending(identity) }"
-          :aria-label="controlActionLabel(identity)" :title="controlActionLabel(identity)"
           @click.stop="remoteControlIsActive(identity) ? rtc.exitRemoteControl() : remoteControlIsPending(identity) ? rtc.cancelPendingRemoteControl(identity) : requestParticipantControl(identity)">
           <Square v-if="remoteControlIsActive(identity)" :size="15" /><X v-else-if="remoteControlIsPending(identity)" :size="15" /><MousePointer2 v-else :size="15" />
+          {{ controlActionLabel(identity) }}
         </button>
       </template>
       <template #default="{ select, visible, previewsMounted, focusedIdentity, watchingElsewhere }">

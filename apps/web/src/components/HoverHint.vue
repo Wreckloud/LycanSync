@@ -74,6 +74,7 @@ onScopeDispose(close);
 .hover-hint-anchor { display: inline-flex; flex: 0 0 auto; }
 .hover-hint { position: fixed; z-index: 30; width: max-content; max-width: min(260px, calc(100vw - 24px)); padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; pointer-events: none; }
 .hover-hint-detail { color: var(--muted); white-space: nowrap; }
+.hover-hint { white-space: pre-line; }
 .hover-hint-enter-active, .hover-hint-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .hover-hint-enter-from, .hover-hint-leave-to { opacity: 0; transform: translateX(-4px); }
 @media (prefers-reduced-motion: reduce) { .hover-hint-enter-active, .hover-hint-leave-active { transition: none; } }

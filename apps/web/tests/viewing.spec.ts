@@ -316,6 +316,12 @@ test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选�
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await expect.poll(volumes).toEqual({ A: 0.35, B: 0, C: 0 });
   await page.locator('.viewing-surface').first().hover();
+  const focusedSound = page.locator('.viewing-action-buttons .volume-button');
+  await focusedSound.hover();
+  await page.mouse.wheel(0, 80);
+  await expect(focusedSound).toHaveAttribute('aria-description', /95%/);
+  await expect.poll(volumes).toMatchObject({ A: expect.closeTo(0.3325, 6) });
+  await focusedSound.press('ArrowUp');
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
@@ -353,8 +359,13 @@ test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复�
   await expect(preview).toHaveCSS('animation-name', 'none');
 });
 
-test('观看状态使用实际往返延迟，滚轮进网格且网格选中一路后放大', async ({ page }) => {
+test('观看状态使用实际往返延迟，滚轮进网格且网格选中一路后放大', async ({ page }, testInfo) => {
   await sharing(page, ['A', 'B']);
+  await page.evaluate(() => {
+    const room = (window as unknown as { __viewingTest: { control(id: string): void; addShareAudio(ids: string[]): void } }).__viewingTest;
+    room.control('A');
+    room.addShareAudio(['A']);
+  });
   await page.getByRole('button', { name: '观看成员A的共享画面' }).click();
   const connection = page.locator('.viewing-tile .viewing-connection');
   await expect(connection).not.toHaveAttribute('title');
@@ -373,6 +384,11 @@ test('观看状态使用实际往返延迟，滚轮进网格且网格选中一�
     await expect(cardSignal.locator('.lit')).toHaveCount(2);
     await expect(page.locator('.viewing-tile .signal-bars .lit')).toHaveCount(2);
   }
+  await page.locator('.viewing-surface').hover();
+  await connection.locator('.signal-bars').hover();
+  await expect(page.getByRole('tooltip')).toContainText('主播连接质量：良好 本机到媒体服务器往返：100 ms');
+  await expect(page.getByRole('tooltip')).toContainText('接收画面：1280×720');
+  await page.screenshot({ path: testInfo.outputPath('focus-network.png') });
   await page.locator('.viewing-surface').hover();
   await page.mouse.wheel(0, 120);
   await expect(page.locator('.viewing-tile')).toHaveCount(2);
@@ -703,7 +719,8 @@ test('聚焦卡片只隐藏重复预览，按可用空间居中且不干扰后�
   await page.mouse.move(950, 850);
   await expect(card.locator('video')).toHaveCount(0);
   await expect(card.getByRole('status')).toHaveText('已聚焦');
-  await expect(card.locator('.participant-media')).toHaveAttribute('data-select-hint', '已聚焦');
+  await expect(card.getByRole('status')).toBeVisible();
+  expect(await card.locator('.participant-media').evaluate(el => getComputedStyle(el, '::after').content)).toBe('none');
   await expect(page.locator('.viewing-tile video')).toHaveCount(1);
   const mainVideo = await page.locator('.viewing-tile video').elementHandle();
   await expect.poll(() => strip.evaluate(element => {
@@ -1278,9 +1295,10 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await sharing(page, ['A']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { control(id: string): void } }).__viewingTest.control('A'));
   const viewer = await openWatching(page);
+  await expect(viewer.getByRole('button', { name: '请求远程控制' })).toHaveCount(0);
   await viewer.getByRole('button', { name: '聚焦成员A', exact: true }).click();
   await viewer.locator('.viewing-tile').hover();
-  await viewer.getByRole('button', { name: '申请远程控制', exact: true }).click();
+  await viewer.getByRole('button', { name: '请求远程控制', exact: true }).click();
   expect(context.pages()).toHaveLength(2);
   const popup = page.waitForEvent('popup');
   await page.evaluate(() => (window as unknown as { __viewingTest: { grant(id: string): void } }).__viewingTest.grant('A'));
@@ -1302,7 +1320,7 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await controller.close();
   await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
   await page.locator('.viewing-tile').hover();
-  await expect(page.getByRole('button', { name: '申请远程控制', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '请求远程控制', exact: true })).toHaveCSS('opacity', '1');
 });
 
 

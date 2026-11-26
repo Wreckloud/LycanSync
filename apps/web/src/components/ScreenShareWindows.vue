@@ -23,9 +23,10 @@ const props = defineProps<{
   avatar: (identity: string) => string;
   inputBlocked: boolean;
   mutedShares: string[];
+  shareVolume: (identity: string) => number;
   controlPlaceholder: (identity: string) => string;
 }>();
-const emit = defineEmits<{ notice: [message: string]; toggleShareAudio: [identity: string]; requestControl: [identity: string] }>();
+const emit = defineEmits<{ notice: [message: string]; toggleShareAudio: [identity: string]; changeShareVolume: [identity: string, volume: number]; requestControl: [identity: string] }>();
 const view = reactive(useScreenShareLayout({
   room: () => props.rtc.room, participants: () => props.rtc.participants,
   revision: () => props.rtc.revision, status: () => props.rtc.status,
@@ -150,6 +151,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, au
   <Teleport v-if="inlineTarget" :to="inlineTarget">
     <CallViewingPanel ref="inlinePanel" :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision" :snapshot="snapshot"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
+      :share-volume="shareVolume" @change-share-volume="(id, volume) => emit('changeShareVolume', id, volume)" @toggle-share-audio="emit('toggleShareAudio', $event)"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
       <template #control="{ identity }"><slot name="control" :identity="identity" /></template>
@@ -162,6 +164,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, au
     <section class="watching-window" aria-label="多人观看窗口">
       <CallViewingPanel :view="view" :room="rtc.room" :revision="rtc.revision" :snapshot="snapshot" :avatar="avatar" :listening="rtc.listening"
         :private-control="controlPlaceholder" :recording-elapsed="recordingElapsed"
+        :share-volume="shareVolume" @change-share-volume="(id, volume) => emit('changeShareVolume', id, volume)" @toggle-share-audio="emit('toggleShareAudio', $event)"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
         <template #control="{ identity }"><slot name="control" :identity="identity" /></template>

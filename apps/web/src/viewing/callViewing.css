@@ -63,9 +63,12 @@
 .viewing-caption > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .is-focus-stage .viewing-caption { max-width: calc(50% - 24px); }
 .viewing-caption time { flex-shrink: 0; margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.viewing-actions:has(.viewing-control-action.is-engaged) { opacity: 1; transform: none; transition-delay: 0s; }
-.viewing-actions:has(.viewing-control-action.is-engaged) button { pointer-events: auto; }
-.viewing-actions .viewing-control-action.is-engaged { color: var(--accent); }
+.viewing-control-action { position: absolute; z-index: 2; right: 8px; top: 8px; display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--control-radius); color: var(--text); font: inherit; font-size: 12px; background: var(--viewing-actions-tint); opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) ease; }
+.viewing-tile:is(:hover, :has(:focus-visible)) .viewing-control-action { opacity: 1; pointer-events: auto; }
+.viewing-control-action.is-engaged { color: var(--accent); }
+.viewing-actions .volume-button { margin: 0; }
+.viewing-actions:has(.volume-button.is-dragging) { opacity: 1; transform: none; }
+.viewing-tile:is(:hover, :has(:focus-visible)) .viewing-connection { pointer-events: auto; }
 .viewing-action-buttons { display: flex; flex-shrink: 0; gap: 4px; }
 .viewing-actions .viewing-expand-members { position: absolute; left: 50%; transform: translateX(-50%); }
 .viewing-expand-members svg { transition: transform var(--motion-surface-duration) var(--motion-ease); }
@@ -95,6 +98,7 @@
 .watching-window { position: relative; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--panel-soft); }
 .watching-window > .call-viewing-panel { flex: 1; min-height: 0; overflow: hidden; }
 @media (hover: none) {
+  .viewing-control-action, .viewing-actions .viewing-connection { opacity: 1; pointer-events: auto; }
   .viewing-actions { opacity: 1; transform: none; }
   .viewing-fold-strip.is-under-focus::before { opacity: 1; }
   .viewing-actions button { pointer-events: auto; }
