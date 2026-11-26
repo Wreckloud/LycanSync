@@ -128,8 +128,8 @@ function setSourceOpen(source: Source, open: boolean) {
             <div v-else class="large-avatar" aria-hidden="true">维</div>
             <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
               :class="{ 'has-sound': !sharingPaused && !accompaniment.paused && !silent }">
-              <i v-for="(steps, i) in [3, 5, 7, 6, 8, 10, 9, 7, 5, 6, 9, 8, 6, 7, 8, 6, 4, 5, 6, 4, 3, 4, 3, 2]" :key="i"
-                :style="{ '--steps': steps, animationDelay: i * -0.17 + 's' }" />
+              <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 19, 24, 19, 14]" :key="i"
+                :style="{ height: height + 'px', animationDelay: i * -0.17 + 's' }" />
             </div>
             <Transition name="badge-fade">
               <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
@@ -234,8 +234,8 @@ function setSourceOpen(source: Source, open: boolean) {
 .own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: end; gap: 2px; overflow: hidden; opacity: .36; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
-.spectrum-preview i { height: calc(4px + var(--steps) * 5px); background: repeating-linear-gradient(to top, var(--muted) 0 4px, transparent 4px 5px); clip-path: inset(calc(100% - 4px) 0 0); }
-.spectrum-preview.has-sound i { animation: spectrum-pulse 900ms steps(var(--steps), end) infinite alternate; }
+.spectrum-preview i { background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); }
+.spectrum-preview.has-sound i { animation: spectrum-pulse 900ms ease-in-out infinite alternate; }
 @keyframes spectrum-pulse { from { clip-path: inset(calc(100% - 4px) 0 0); } to { clip-path: inset(0); } }
 .badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
