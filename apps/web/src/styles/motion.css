@@ -14,7 +14,7 @@
 }
 
 .group-selection-marker { transition: transform var(--motion-layout-duration) var(--motion-ease); }
-.group-content-ready { animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
+.group-content-ready, .settings-content > * { animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
 @keyframes group-content-reveal { from { opacity: .82; } to { opacity: 1; } }
 
 .surface-panel-enter-active, .surface-panel-leave-active,

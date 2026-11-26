@@ -141,7 +141,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         </div>
       </header>
       <div class="settings-content">
-        <p v-if="sectionDescription" class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
+        <p v-if="sectionDescription" :key="activeSection" class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
         <div v-if="user.administrator && activeSection === 'members'" class="owner-settings-page">
           <OwnerSettings @notice="emit('notice', $event)" :active="true" :leaving="leaving" />
         </div>
