@@ -10,7 +10,7 @@ function turnRecord(event: Event) {
   if (!props.sharing || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const icon = (event.currentTarget as HTMLElement).querySelector('.record-icon');
   if (icon && !icon.getAnimations().length) {
-    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 3600, easing: 'linear' });
+    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 6400, easing: 'ease-in-out' });
   }
 }
 </script>
