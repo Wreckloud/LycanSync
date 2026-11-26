@@ -48,19 +48,15 @@ contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
   },
 });
 
-let nativeVideoCanvas;
-let nativeVideoContext;
-let nativeVideoCanvasSessionId;
+let nativeVideoSurface;
 let stoppedNativeVideoSessionId;
 let suspendedNativeVideoSessionId;
 
 function releaseNativeVideoCanvas(sessionId) {
-  if (!nativeVideoCanvas || nativeVideoCanvasSessionId !== sessionId) return;
-  nativeVideoCanvas.width = 0;
-  nativeVideoCanvas.height = 0;
-  nativeVideoCanvas = undefined;
-  nativeVideoContext = undefined;
-  nativeVideoCanvasSessionId = undefined;
+  if (!nativeVideoSurface || nativeVideoSurface.sessionId !== sessionId) return;
+  nativeVideoSurface.canvas.width = 0;
+  nativeVideoSurface.canvas.height = 0;
+  nativeVideoSurface = undefined;
 }
 
 function stopReceivingNativeVideo(sessionId) {
@@ -72,20 +68,33 @@ function stopReceivingNativeVideo(sessionId) {
 function copyNativeVideoFrame(frame, sessionId) {
   const width = frame.visibleRect?.width ?? frame.displayWidth;
   const height = frame.visibleRect?.height ?? frame.displayHeight;
-  if (nativeVideoCanvasSessionId !== sessionId) releaseNativeVideoCanvas(nativeVideoCanvasSessionId);
-  if (!nativeVideoCanvas) {
-    const canvas = new OffscreenCanvas(width, height);
-    const context = canvas.getContext('2d', { alpha: false });
-    if (!context) throw new Error('nativeVideoCanvasUnavailable');
-    nativeVideoCanvas = canvas;
-    nativeVideoContext = context;
-    nativeVideoCanvasSessionId = sessionId;
+  if (nativeVideoSurface && nativeVideoSurface.sessionId !== sessionId) releaseNativeVideoCanvas(nativeVideoSurface.sessionId);
+  if (!nativeVideoSurface || nativeVideoSurface.width !== width || nativeVideoSurface.height !== height) {
+    // 视频编码使用偶数画布；多出的一行或一列留黑，原画面保持原尺寸。
+    const canvasWidth = width + width % 2;
+    const canvasHeight = height + height % 2;
+    if (!nativeVideoSurface) {
+      const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) throw new Error('nativeVideoCanvasUnavailable');
+      nativeVideoSurface = { sessionId, canvas, context, width, height };
+    } else {
+      const { canvas, context } = nativeVideoSurface;
+      if (canvas.width === canvasWidth && canvas.height === canvasHeight) {
+        // 相邻尺寸可能复用同一画布；上帧右边或下边的内容不能留在补边里。
+        if (width < nativeVideoSurface.width) context.clearRect(width, 0, 1, canvasHeight);
+        if (height < nativeVideoSurface.height) context.clearRect(0, height, canvasWidth, 1);
+      } else {
+        if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+        if (canvas.height !== canvasHeight) canvas.height = canvasHeight;
+      }
+      nativeVideoSurface.width = width;
+      nativeVideoSurface.height = height;
+    }
   }
-  if (nativeVideoCanvas.width !== width) nativeVideoCanvas.width = width;
-  if (nativeVideoCanvas.height !== height) nativeVideoCanvas.height = height;
   // 当前 Electron 的外部纹理直接进入视频轨道会卡住；画布快照隔开两边的资源归属。
-  nativeVideoContext.drawImage(frame, 0, 0, width, height);
-  return new VideoFrame(nativeVideoCanvas, { timestamp: frame.timestamp });
+  nativeVideoSurface.context.drawImage(frame, 0, 0, width, height);
+  return new VideoFrame(nativeVideoSurface.canvas, { timestamp: frame.timestamp });
 }
 
 sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token, sessionId) => {

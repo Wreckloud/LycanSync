@@ -14,7 +14,9 @@ function fixture() {
     constructor(width, height) { this.width = width; this.height = height; canvases.push(this); }
     getContext() {
       if (options.contextMissing) return null;
-      return { drawImage: (...args) => { if (options.drawFails) throw new Error('drawFailed'); this.draw = args; } };
+      this.clears = [];
+      return { drawImage: (...args) => { if (options.drawFails) throw new Error('drawFailed'); this.draw = args; },
+        clearRect: (...args) => this.clears.push(args) };
     }
   }
   class CopiedFrame {
@@ -73,6 +75,23 @@ test('无效标记不读取或复制纹理，但仍归还导入引用', async ()
   assert.equal(imported.releases, 1);
   assert.equal(frame.closed, 0);
   assert.equal(f.canvases.length, 0);
+});
+
+test('奇数内容按原尺寸绘制到偶数画布，缩小时只清除变成补边的旧像素', async () => {
+  const f = fixture();
+  const deliver = (width, height) => f.deliver('session-a', 'native-screen-frame', { width, height });
+  await deliver(1920, 1062);
+  const canvas = f.canvases[0];
+  const { frame } = await deliver(1919, 1061);
+  assert.deepEqual([canvas.width, canvas.height], [1920, 1062]);
+  assert.deepEqual(canvas.draw, [frame, 0, 0, 1919, 1061]);
+  assert.deepEqual(canvas.clears, [[1919, 0, 1, 1062], [0, 1061, 1920, 1]]);
+  await deliver(1919, 1061);
+  await deliver(1920, 1062);
+  assert.equal(canvas.clears.length, 2);
+  await deliver(1, 5);
+  assert.deepEqual([canvas.width, canvas.height], [2, 6]);
+  assert.equal(f.canvases.length, 1);
 });
 
 test('复制或转交失败释放持有的资源并明确报错，下一次能重新建立画布', async (context) => {
