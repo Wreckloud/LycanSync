@@ -40,6 +40,11 @@ function median(values: number[], decimals = 0) {
   return Math.round(value * 10 ** decimals) / 10 ** decimals;
 }
 
+function reportLayerKey(layer: DiagnosticSample['streams'][number]['layers'][number]) {
+  // 空间层按实际 RID 匹配；没有 RID 的统计保留原来的数字序号。
+  return layer.rid ?? layer.layer;
+}
+
 function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, desktop: boolean) {
   const grouped = new Map<string, { sample: DiagnosticSample; stream: DiagnosticSample['streams'][number] }[]>();
   for (const sample of samples) for (const stream of sample.streams) {
@@ -76,16 +81,15 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       .filter((value): value is number => typeof value === 'number');
     const renderTotal = renderEntries.reduce((sum, { sample }) => sum + (sample.obsRenderInterval?.totalFrames ?? 0), 0);
     const renderLagged = renderEntries.reduce((sum, { sample }) => sum + (sample.obsRenderInterval?.laggedFrames ?? 0), 0);
-    const layerIds = [...new Set(entries.flatMap(({ stream }) => stream.layers.map((layer) => layer.layer)))];
-    const layers = layerIds.map((layer) => {
-      const matching = entries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer));
-      const active = matching.find((item) => item.active !== null)?.active ?? null;
-      const values = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false)
-        .map((item) => item.fps).filter((value): value is number => value !== null));
-      const measured = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false));
+    const layerIds = new Set(entries.flatMap(({ stream }) => stream.layers.map(reportLayerKey)));
+    const layers = Array.from(layerIds, (key) => {
+      const matching = entries.flatMap(({ stream }) => stream.layers.filter((item) => reportLayerKey(item) === key));
+      const active = matching.at(-1)!.active;
+      const measured = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => reportLayerKey(item) === key && item.active !== false));
+      const values = measured.map((item) => item.fps).filter((value): value is number => value !== null);
       const numbers = (field: 'bitrateKbps' | 'averageEncodeMs' | 'averageDecodeMs' | 'roundTripMs' | 'transportRoundTripMs' | 'receiverReportedLossPercent' | 'receiveLossPercent' | 'jitterBufferMs') =>
         measured.map((item) => item[field]).filter((value): value is number => value !== null);
-      return { layer, active, size: matching.find((item) => item.size !== '未知')?.size ?? null,
+      return { layer: matching[0].layer, rid: matching[0].rid, active, size: matching.find((item) => item.size !== '未知')?.size ?? null,
         typicalFps: median(values), validSamples: values.length,
         typicalBitrateKbps: median(numbers('bitrateKbps')), typicalEncodeMs: median(numbers('averageEncodeMs'), 1),
         typicalDecodeMs: median(numbers('averageDecodeMs'), 1),
@@ -155,7 +159,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       typicalReceivedFps !== null ? `页面收到约 ${typicalReceivedFps} FPS。` : null,
       typicalSubmittedFps !== null ? `页面提交约 ${typicalSubmittedFps} FPS。` : null,
       layers.some((layer) => layer.typicalFps !== null)
-        ? `${first.stream.direction === '发送' ? '编码' : '解码'}层 FPS 分别记录为 ${layers.map((layer) => `第 ${layer.layer} 层 ${layer.typicalFps ?? '等待统计'}`).join('、')}，不跨层相加。` : null,
+        ? `${first.stream.direction === '发送' ? '编码' : '解码'}层 FPS 分别记录为 ${layers.map((layer) => `${layer.rid ?? `第 ${layer.layer}`} 层 ${layer.typicalFps ?? '等待统计'}`).join('、')}，不跨层相加。` : null,
       median(playbackFps) !== null ? `本机显示约 ${median(playbackFps)} FPS。` : null,
       median(nativeCaptureFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '原生采集收到'}约 ${median(nativeCaptureFps)} FPS。` : null,
       median(nativeProcessedFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 宿主发出共享纹理帧' : '原生采集处理'}约 ${median(nativeProcessedFps)} FPS。` : null,
@@ -293,7 +297,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         submittedFps: numeric(stream.nativeInputInterval.submittedFps),
         backpressureDropRate: numeric(stream.nativeInputInterval.backpressureDropRate),
       },
-      layers: stream.layers.map((layer, index) => ({ layer: index + 1, size: layer.size, codec: label(layer.codec),
+      layers: stream.layers.map((layer, index) => ({ layer: index + 1, rid: layer.rid ?? null, size: layer.size, codec: label(layer.codec),
         active: layer.active,
         frameCount: numeric(layer.frameCount), fps: numeric(layer.fps), intervalMs: numeric(layer.intervalMs),
         bitrateKbps: numeric(layer.bitrateKbps), encoder: label(layer.encoder),
@@ -481,7 +485,7 @@ export function useDiagnosticReport(options: {
           const sourceDimensions = stream.direction === '发送' && exported.nativeVideoSessionMatched
             && snapshot.native?.frameWidth && snapshot.native.frameHeight
             ? `${snapshot.native.frameWidth}×${snapshot.native.frameHeight}` : '';
-          const encodedDimensions = observed.layers.map((layer) => layer.size).sort().join(',');
+          const encodedDimensions = stream.layers.map(layer => `${reportLayerKey(layer)}:${layer.size}`).sort().join(',');
           const dimensions = [observed.target?.resolution ?? '', sourceDimensions, encodedDimensions].join('|');
           const previousSegment = streamSegments.get(streamKey);
           const renderConfiguration = stream.direction === '发送' && exported.nativeVideoSessionMatched
@@ -500,7 +504,7 @@ export function useDiagnosticReport(options: {
               [exported.native?.framesProcessed ?? null, samples.at(-1)?.native?.framesProcessed ?? null],
             ] : []),
             ...stream.layers.map((layer) => [layer.frameCount,
-              previousStream.layers.find((item) => item.layer === layer.layer)?.frameCount ?? null]),
+              previousStream.layers.find((item) => reportLayerKey(item) === reportLayerKey(layer))?.frameCount ?? null]),
           ].some(([current, prior]) => typeof current === 'number' && typeof prior === 'number' && current < prior);
           let segmentReason = previousSegment ? 'continuation' : 'initial';
           if (previousSegment) {
@@ -655,6 +659,7 @@ export function useDiagnosticReport(options: {
           completedWrites: 'all-real-and-placeholder-writes-resolved-not-network-delivered',
           placeholderFrames: 'excluded-from-real-frame-submissions' },
         layerActive: 'outbound-rtp-active-or-matching-sender-encoding',
+        layerRid: 'browser-reported-outbound-simulcast-rid; layer-number-is-display-order',
         remoteParticipantCount: 'room-members-not-viewers',
         network: { roundTripMs: 'new-rtcp-receiver-report-client-to-sfu-not-end-to-end',
           transportRoundTripMs: 'selected-ice-candidate-pair-currentRoundTripTime-new-responsesReceived-client-to-sfu-not-end-to-end',

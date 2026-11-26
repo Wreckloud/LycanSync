@@ -707,6 +707,32 @@ it('手动码率变化及恢复推荐另起分段，报告同时记录来源与�
   expect(result.samples[2].streams[0].segmentReason).toBe('quality-change');
 });
 
+it('发送层改变顺序、暂停和恢复时按 RID 比较，尺寸变化仍另起区间', async () => {
+  const { report, exportDiagnosticReport } = setup();
+  const next = snapshot();
+  const base = next.streams[0].layers[0];
+  const h = { ...base, rid: 'h' as const, size: '1280×720', fps: 30, frameCount: 5 };
+  const f = { ...base, rid: 'f' as const, size: '1920×1080', fps: 60, frameCount: 400 };
+  next.streams[0].layers = [h, f];
+  collect.mockResolvedValue(next);
+  report.start(); await vi.advanceTimersByTimeAsync(0);
+  next.streams[0].layers = [f, h];
+  h.active = false;
+  await vi.advanceTimersByTimeAsync(2000);
+  h.active = true; h.frameCount += 60;
+  await vi.advanceTimersByTimeAsync(2000);
+  h.size = '960×540';
+  await vi.advanceTimersByTimeAsync(2000);
+  report.stop(); await report.save('');
+  const exported = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(exported.samples.map((s: { streams: { segmentReason: string }[] }) => s.streams[0].segmentReason))
+    .toEqual(['initial', 'continuation', 'continuation', 'dimensions-change']);
+  expect(exported.samples[1].streams[0].layers).toMatchObject([{ layer: 1, rid: 'f' }, { layer: 2, rid: 'h', active: false }]);
+  expect(exported.summary.segments[0].typicalFps.encodingLayers).toMatchObject([
+    { rid: 'h', typicalFps: 30, validSamples: 1 }, { rid: 'f', typicalFps: 60, validSamples: 2 },
+  ]);
+});
+
 it.each(['capture', 'unsubscribed', 'disabled', 'muted'])(
   '%s 暂停及恢复边界不计入摘要，原始区间与累计数仍保留', async (pause) => {
     const normal = snapshot();

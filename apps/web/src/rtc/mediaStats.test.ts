@@ -6,6 +6,15 @@ function report(stats: Record<string, unknown>[]): RTCStatsReport {
 }
 
 describe('屏幕共享媒体统计', () => {
+  it('只识别实际发送报告的允许 RID，接收层与内部统计 ID 不作为 RID', () => {
+    for (const direction of ['inbound-rtp', 'outbound-rtp'] as const) {
+      for (const rid of ['q', 'h', 'f', 'private', undefined]) {
+        const sample = report([{ id: 'q', type: direction, kind: 'video', rid, timestamp: 1000 }]);
+        const layer = readVideoLayers(sample, direction, new Map(), 'track')[0];
+        expect(layer.rid).toBe(direction === 'outbound-rtp' && rid !== 'private' ? rid : undefined);
+      }
+    }
+  });
   it('接收端记录实际解码实现与区间耗时，缺失、停帧、重置和新轨道不伪造统计', () => {
     const previous = new Map();
     const sample = (timestamp: number, framesDecoded: number, totalDecodeTime: number) => report([

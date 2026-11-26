@@ -1,5 +1,6 @@
 export interface VideoLayerStats {
   id: string;
+  rid?: 'q' | 'h' | 'f';
   active: boolean | null;
   size: string;
   frameCount: number | null;
@@ -169,6 +170,7 @@ export function readVideoLayers(
     }
     layers.push({
       id: stat.rid ?? stat.id,
+      rid: direction === 'outbound-rtp' && (stat.rid === 'q' || stat.rid === 'h' || stat.rid === 'f') ? stat.rid : undefined,
       active,
       size: stat.frameWidth && stat.frameHeight ? `${stat.frameWidth}×${stat.frameHeight}` : '未知',
       frameCount: typeof frames === 'number' ? frames : null,
