@@ -290,26 +290,29 @@ mod windows_bridge {
         pub window_title: Option<String>,
     }
 
-    // EnumWindows 按窗口前后次序枚举，每个候选进程只读取最前面的可见标题。
+    // 每个应用只使用最前面的普通窗口；托盘和工具浮窗不单独作为音源。
     unsafe extern "system" fn read_application_window(
         window: windows::Win32::Foundation::HWND,
         param: windows::Win32::Foundation::LPARAM,
     ) -> windows::core::BOOL {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GW_OWNER, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+            GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextW,
+            GetWindowThreadProcessId, IsWindowVisible, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         };
-        let titles = unsafe { &mut *(param.0 as *mut HashMap<u32, Option<String>>) };
+        let titles = unsafe { &mut *(param.0 as *mut HashMap<u32, String>) };
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
-        if let Some(title) = titles.get_mut(&pid)
-            && title.is_none()
+        if let std::collections::hash_map::Entry::Vacant(title) = titles.entry(pid)
             && unsafe { IsWindowVisible(window) }.as_bool()
             && unsafe { GetWindow(window, GW_OWNER) }.is_err()
+            && unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) }
+                & ((WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as isize)
+                == 0
         {
             let mut text = [0u16; 256];
             let length = unsafe { GetWindowTextW(window, &mut text) };
             if length > 0 {
-                *title = Some(String::from_utf16_lossy(&text[..length as usize]));
+                title.insert(String::from_utf16_lossy(&text[..length as usize]));
             }
         }
         true.into()
@@ -317,7 +320,7 @@ mod windows_bridge {
 
     #[napi_derive::napi]
     pub fn list_application_audio_processes(
-        executables: Vec<String>,
+        known_executables: Vec<String>,
     ) -> Result<Vec<ApplicationAudioProcess>> {
         let snapshot = OwnedHandle::new(
             unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
@@ -332,7 +335,18 @@ mod windows_bridge {
         let mut desktop_session = 0;
         unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut desktop_session) }
             .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
+        let mut titles: HashMap<u32, String> = HashMap::new();
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::EnumWindows(
+                Some(read_application_window),
+                windows::Win32::Foundation::LPARAM(
+                    (&mut titles as *mut HashMap<u32, String>) as isize,
+                ),
+            )
+        }
+        .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
         let mut candidates = std::collections::HashMap::new();
+        let mut parents = HashMap::new();
         loop {
             let len = entry
                 .szExeFile
@@ -341,7 +355,9 @@ mod windows_bridge {
                 .unwrap_or(entry.szExeFile.len());
             let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase();
             let mut session = 0;
-            if executables.contains(&name)
+            parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+            if (known_executables.contains(&name) || titles.contains_key(&entry.th32ProcessID))
+                && !matches!(name.as_str(), "explorer.exe" | "lycansync.exe")
                 && unsafe { ProcessIdToSessionId(entry.th32ProcessID, &mut session) }.is_ok()
                 && session == desktop_session
             {
@@ -354,17 +370,12 @@ mod windows_bridge {
                 break;
             }
         }
-        let mut titles: HashMap<u32, Option<String>> =
-            candidates.keys().map(|&pid| (pid, None)).collect();
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::EnumWindows(
-                Some(read_application_window),
-                windows::Win32::Foundation::LPARAM(
-                    (&mut titles as *mut HashMap<u32, Option<String>>) as isize,
-                ),
-            )
+        // 应用采集包含子进程，选择客户端或它的启动器会把通话声音传回房间。
+        let mut ancestor = unsafe { GetCurrentProcessId() };
+        while let Some(parent) = parents.remove(&ancestor) {
+            candidates.remove(&ancestor);
+            ancestor = parent;
         }
-        .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
         let mut result = Vec::new();
         for (&pid, (parent, name)) in &candidates {
             // 浏览器的渲染和音频子进程随根进程一起采集。
@@ -410,7 +421,7 @@ mod windows_bridge {
                 pid,
                 executable: name.clone(),
                 creation: birth.to_string(),
-                window_title: titles.remove(&pid).flatten(),
+                window_title: titles.remove(&pid),
             });
         }
         result.sort_by_key(|p| p.pid);

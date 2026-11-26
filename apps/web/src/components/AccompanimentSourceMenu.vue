@@ -11,11 +11,10 @@ const other = computed(() => props.sources.filter(source => !source.common).sort
 const root = ref<HTMLElement>();
 const compact = ref(false);
 const expanded = ref(false);
-const hasTwoLevels = computed(() => frequent.value.length > 0 && other.value.length > 0);
 const pages = computed(() => {
-  const main = { key: 'main', label: '伴奏来源', rows: frequent.value.length ? frequent.value : other.value };
-  if (!expanded.value || !hasTwoLevels.value) return [main];
-  const more = { key: 'other', label: '其他应用', rows: other.value };
+  const main = { key: 'main', label: '伴奏来源', rows: frequent.value };
+  if (!expanded.value) return [main];
+  const more = { key: 'other', label: '更多音源', rows: other.value };
   return compact.value ? [more] : [main, more];
 });
 let stopPositioning: (() => void) | undefined;
@@ -89,10 +88,10 @@ onScopeDispose(() => {
           <img v-if="source.common && source.icon" :src="source.icon" width="16" height="16" alt="" />
           <span :title="source.name">{{ source.name }}</span>
         </button>
-        <p v-if="!page.rows.length && !busy && !error">打开播放器或浏览器后，它会出现在这里。</p>
+        <p v-if="!page.rows.length && !busy && !error">{{ page.key === 'main' ? '当前没有打开的常用音源。' : '没有其他可选应用。打开应用窗口后，重新打开伴奏菜单即可选择。' }}</p>
       </div>
-      <button v-if="page.key === 'main' && hasTwoLevels" type="button" class="call-menu-action other-trigger" :aria-expanded="expanded" @click="toggleOther">
-        其他应用（{{ other.length }}）<ChevronRight class="call-menu-chevron" :size="14" />
+      <button v-if="page.key === 'main'" type="button" class="call-menu-action other-trigger" :aria-expanded="expanded" @click="toggleOther">
+        更多音源<ChevronRight class="call-menu-chevron" :size="14" />
       </button>
       <p v-if="error && page === pages.at(-1)" role="alert">{{ error }}</p>
     </section>

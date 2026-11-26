@@ -16,7 +16,7 @@ function createApplicationAudioSources(enumerate) {
   let targets = new Map();
   function list() {
     const processes = enumerate([...applications.keys()]).filter(target =>
-      applications.has(target.executable) && (!browsers.has(target.executable) || target.windowTitle));
+      target.windowTitle || (applications.has(target.executable) && !browsers.has(target.executable)));
     const counts = new Map();
     for (const target of processes) counts.set(target.executable, (counts.get(target.executable) ?? 0) + 1);
     const next = new Map();
@@ -27,8 +27,10 @@ function createApplicationAudioSources(enumerate) {
         && old.executable === target.executable);
       const id = existing?.[0] ?? randomUUID();
       next.set(id, target);
-      const name = counts.get(target.executable) > 1 ? app[1] + ' · ' + (target.windowTitle || target.pid) : app[1];
-      sources.push({ id, application: app[0], name });
+      let name = app?.[1] ?? target.executable.replace(/\.exe$/i, '');
+      if (!app || counts.get(target.executable) > 1) name += ' · ' + (target.windowTitle || target.pid);
+      // 发布名称会传给队友，自定义应用的窗口标题仅用于本机选择。
+      sources.push({ id, application: app?.[0] ?? 'other', name });
     }
     targets = next;
     return sources;
