@@ -1,99 +1,211 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onScopeDispose, ref } from 'vue';
-import { AudioLines, HeadphoneOff, Headphones, MicOff, Music2, Square } from '@lucide/vue';
+import { computed, nextTick, ref } from 'vue';
+import { AppWindow, AudioLines, HeadphoneOff, Headphones, MicOff, Monitor, Music2, Square, Volume2, VolumeX } from '@lucide/vue';
+import DialogTransition from '../components/DialogTransition.vue';
+import MemberVolumeButton from '../components/MemberVolumeButton.vue';
 import VoiceLevelMic from '../components/VoiceLevelMic.vue';
+import { useBackdropDismiss } from '../components/useBackdropDismiss';
+import { keepDialogFocus } from '../components/dialogFocus';
+import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
 
-const sources = ['QQ 音乐', '网易云音乐'];
-const playing = ref('');
-const choosing = ref(false);
+const sources = ref([
+  { id: 'player', name: 'QQ 音乐', open: true, paused: false },
+  { id: 'browser', name: 'Google Chrome', open: true, paused: false },
+  { id: 'other', name: '本地播放器', open: false, paused: true },
+]);
+type Source = typeof sources.value[number];
+const available = computed(() => sources.value.filter(source => source.open));
+const sharingId = ref('');
+const accompaniment = computed(() => available.value.find(source => source.id === sharingId.value));
+const screen = ref<'off' | 'silent' | 'with-audio'>('off');
+const windowAudio = ref(false);
+const simulateFailure = ref(false);
+const dialog = ref<'audio' | 'screen'>();
+const dialogPanel = ref<HTMLElement>();
+const error = ref('');
 const mic = ref(true);
 const listening = ref(true);
-const trigger = ref<HTMLButtonElement>();
-const picker = ref<HTMLElement>();
+const mediaVolume = ref(1);
+const lastAudible = ref(1);
+const voiceVolume = ref(1);
+const lastVoice = ref(1);
+const cards = [{ local: true, label: '你的视角' }, { local: false, label: '队友的视角' }];
 
-function closePicker(restoreFocus = false) {
-  choosing.value = false;
-  if (restoreFocus) trigger.value?.focus();
+function changeMediaVolume(value: number) {
+  mediaVolume.value = value;
+  if (value > 0) lastAudible.value = value;
+}
+function changeVoiceVolume(value: number) {
+  voiceVolume.value = value;
+  if (value > 0) lastVoice.value = value;
 }
 
-async function toggleAccompaniment() {
-  if (playing.value) { playing.value = ''; return; }
-  if (choosing.value) { closePicker(true); return; }
-  choosing.value = true;
+async function openDialog(kind: 'audio' | 'screen') {
+  error.value = '';
+  windowAudio.value = screen.value === 'with-audio';
+  dialog.value = kind;
   await nextTick();
-  picker.value?.querySelector('button')?.focus();
+  dialogPanel.value?.focus();
 }
+function closeDialog() { dialog.value = undefined; }
+const backdropEvents = useBackdropDismiss(closeDialog);
 
-function start(source: string) {
-  playing.value = source;
-  closePicker(true);
+function startAudio(source: Source) {
+  if (!source.open || screen.value !== 'off') return;
+  if (simulateFailure.value) { error.value = '模拟分享失败，请取消后重新选择。'; return; }
+  sharingId.value = source.id;
+  closeDialog();
 }
-
-function dismissOutside(event: Event) {
-  if (choosing.value && event.target instanceof Node &&
-    !picker.value?.contains(event.target) && !trigger.value?.contains(event.target)) closePicker();
+function shareScreen() {
+  if (simulateFailure.value) { error.value = '模拟共享失败，当前声音保持原样。'; return; }
+  screen.value = windowAudio.value ? 'with-audio' : 'silent';
+  if (windowAudio.value) sharingId.value = '';
+  closeDialog();
 }
-
-onMounted(() => {
-  document.addEventListener('pointerdown', dismissOutside);
-  document.addEventListener('focusin', dismissOutside);
-});
-onScopeDispose(() => {
-  document.removeEventListener('pointerdown', dismissOutside);
-  document.removeEventListener('focusin', dismissOutside);
-});
+function setSourceOpen(source: Source, open: boolean) {
+  source.open = open;
+  if (!open && sharingId.value === source.id) sharingId.value = '';
+}
 </script>
 
 <template>
-  <section class="accompaniment-preview preview-content" aria-labelledby="accompaniment-title">
+  <section class="preview-content accompaniment-lab" aria-labelledby="accompaniment-title">
     <header class="preview-section-heading">
       <h2 id="accompaniment-title">分享伴奏</h2>
-      <p>点自己卡片上的「伴奏」，选一个播放器。这里使用模拟音源，只演示操作。</p>
+      <p>指向自己的卡片，点「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
     </header>
-    <div class="sample-card" @keydown.esc.stop="closePicker(true)">
-      <article class="participant-card">
-        <div class="participant-media">
-          <div class="large-avatar" aria-hidden="true">维</div>
-          <span v-if="playing" class="playing-source" role="status"><AudioLines :size="13" />{{ playing }}</span>
-        </div>
-        <div class="participant-meta">
-          <span class="participant-name"><strong>维克罗德（你）</strong></span>
-          <button ref="trigger" type="button" class="participant-state participant-state-button accompaniment-button"
-            :class="{ 'is-active': playing || choosing }" :aria-expanded="playing ? undefined : choosing"
-            :aria-label="playing ? '停止分享伴奏' : '选择伴奏音源'" @click="toggleAccompaniment">
-            <Square v-if="playing" :size="12" /><Music2 v-else :size="14" />{{ playing ? '停止' : '伴奏' }}
-          </button>
-          <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !mic }"
-            :aria-label="mic ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="mic = !mic">
-            <VoiceLevelMic v-if="mic" :size="14" :level="0" /><MicOff v-else :size="14" />
-          </button>
-          <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !listening }"
-            :aria-label="listening ? '停止收听' : '恢复收听'" @click="listening = !listening">
-            <Headphones v-if="listening" :size="14" /><HeadphoneOff v-else :size="14" />
-          </button>
-        </div>
-      </article>
-      <Transition name="surface-panel">
-        <section v-if="choosing" ref="picker" aria-label="选择伴奏音源" class="source-picker">
-          <header>选择要分享声音的应用</header>
-          <button v-for="source in sources" :key="source" type="button" @click="start(source)">
-            <Music2 :size="15" />{{ source }}
-          </button>
-        </section>
-      </Transition>
+    <div class="card-pair">
+      <section v-for="card in cards" :key="card.label" :aria-label="card.label">
+        <h3>{{ card.label }}</h3>
+        <article class="participant-card">
+          <div class="participant-media">
+            <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
+            <div v-else class="large-avatar" aria-hidden="true">维</div>
+            <div class="media-badges">
+              <button v-if="card.local && (accompaniment || screen === 'off')" type="button" class="media-badge own-badge"
+                :class="{ 'is-sharing': accompaniment }" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
+                @click="accompaniment ? sharingId = '' : openDialog('audio')">
+                <template v-if="accompaniment">
+                  <span class="source-label"><AudioLines :size="14" />{{ accompaniment.name }}</span>
+                  <span class="stop-label"><Square :size="12" />停止伴奏</span>
+                </template>
+                <span v-else><Music2 :size="14" />播放伴奏</span>
+              </button>
+              <span v-if="!card.local && accompaniment" class="media-badge remote-badge" role="img" tabindex="0" aria-label="正在分享伴奏">
+                <AudioLines :size="14" /><span class="remote-label" aria-hidden="true">正在分享伴奏</span>
+              </span>
+              <span v-if="!card.local && (!listening || !mic)" class="media-badge muted-badge" role="img" :aria-label="!listening ? '已停止收听' : '麦克风已关闭'">
+                <HeadphoneOff v-if="!listening" :size="13" /><MicOff v-else :size="13" />
+              </span>
+            </div>
+          </div>
+          <div class="participant-meta">
+            <span class="participant-name"><strong>维克罗德{{ card.local ? '（你）' : '' }}</strong></span>
+            <template v-if="card.local">
+              <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !mic }"
+                :aria-label="mic ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="mic = !mic">
+                <VoiceLevelMic v-if="mic" :size="14" :level="0" /><MicOff v-else :size="14" />
+              </button>
+              <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !listening }"
+                :aria-label="listening ? '停止收听' : '恢复收听'" @click="listening = !listening">
+                <Headphones v-if="listening" :size="14" /><HeadphoneOff v-else :size="14" />
+              </button>
+            </template>
+            <template v-else>
+              <MemberVolumeButton v-if="accompaniment || screen === 'with-audio'" :max="SHARE_VOLUME_MAX" :volume="mediaVolume"
+                :label="mediaVolume ? '静音这路共享声音' : '恢复这路共享声音'"
+                @toggle="changeMediaVolume(mediaVolume ? 0 : lastAudible)" @change="changeMediaVolume">
+                <Volume2 v-if="mediaVolume" :size="14" /><VolumeX v-else :size="14" />
+              </MemberVolumeButton>
+              <MemberVolumeButton :disabled="!mic || !listening" :volume="voiceVolume" :label="voiceVolume ? '静音成员语音' : '恢复成员语音'"
+                @toggle="changeVoiceVolume(voiceVolume ? 0 : lastVoice)" @change="changeVoiceVolume">
+                <VoiceLevelMic v-if="mic && listening && voiceVolume" :size="14" :level="0" /><MicOff v-else :size="14" />
+              </MemberVolumeButton>
+            </template>
+          </div>
+        </article>
+      </section>
     </div>
+    <details class="scenario-controls">
+      <summary>模拟场景</summary>
+      <fieldset>
+        <legend>已打开的应用</legend>
+        <label v-for="source in sources" :key="source.id"><input type="checkbox" :checked="source.open"
+          @change="setSourceOpen(source, ($event.target as HTMLInputElement).checked)" />{{ source.name }}</label>
+      </fieldset>
+      <label v-if="accompaniment"><input v-model="accompaniment.paused" type="checkbox" />暂停当前播放器</label>
+      <label><input v-model="simulateFailure" type="checkbox" />模拟分享失败</label>
+      <button v-if="screen !== 'off'" type="button" @click="openDialog('screen')">调整窗口声音</button>
+      <button type="button" @click="screen === 'off' ? openDialog('screen') : screen = 'off'">
+        {{ screen === 'off' ? '模拟共享画面' : '结束共享画面' }}
+      </button>
+    </details>
+    <DialogTransition>
+      <div v-if="dialog" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="closeDialog">
+        <section ref="dialogPanel" role="dialog" class="dialog-panel audio-picker" aria-modal="true" aria-labelledby="audio-picker-title"
+          tabindex="-1" @keydown="keepDialogFocus">
+          <header><h2 id="audio-picker-title">{{ dialog === 'audio' ? '选择音频来源' : screen === 'off' ? '共享模拟窗口' : '调整窗口声音' }}</h2>
+            <p v-if="dialog === 'audio'">选择一个已打开的应用，向语音房分享它的声音。</p>
+          </header>
+          <div v-if="dialog === 'audio'" class="sources">
+            <button v-for="source in available" :key="source.id" type="button" @click="startAudio(source)">
+              <span class="app-symbol" :class="source.id" aria-hidden="true">
+                <Music2 v-if="source.id === 'player'" :size="20" /><i v-else-if="source.id === 'browser'" /><AppWindow v-else :size="20" />
+              </span>
+              <span><strong>{{ source.name }}</strong><small v-if="source.id === 'browser'">其他标签页的声音也可能被听到</small>
+                <small v-else>{{ source.paused ? '已暂停' : '播放中' }}</small></span>
+            </button>
+            <p v-if="!available.length">打开播放器或浏览器后，它会出现在这里。</p>
+          </div>
+          <div v-else class="screen-options">
+            <label><input v-model="windowAudio" type="checkbox" />共享窗口声音</label>
+            <p v-if="accompaniment">{{ windowAudio ? '共享成功后，窗口声音将替换当前伴奏。' : '将继续分享 ' + accompaniment.name + ' 的伴奏。' }}</p>
+          </div>
+          <p v-if="error" role="alert" class="picker-error">{{ error }}</p>
+          <footer class="card-actions">
+            <button type="button" @click="closeDialog">取消</button>
+            <button v-if="dialog === 'screen'" type="button" class="confirm-button card-actions-end" @click="shareScreen">{{ screen === 'off' ? '开始共享' : '应用' }}</button>
+          </footer>
+        </section>
+      </div>
+    </DialogTransition>
   </section>
 </template>
 
 <style scoped>
-.accompaniment-preview { padding-bottom: 140px; }
-.sample-card { position: relative; width: min(222px, 100%); }
-.accompaniment-button { display: inline-flex; align-items: center; justify-content: center; gap: 3px; width: 44px; font-size: 12px; }
-.accompaniment-button:hover, .accompaniment-button.is-active { color: var(--accent); }
-.playing-source { position: absolute; left: 7px; bottom: 6px; display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 4px; background: var(--panel-raised); color: var(--text); font-size: 11px; }
-.playing-source svg { color: var(--accent); }
-.source-picker { position: absolute; z-index: 1; top: calc(100% + 6px); right: 0; width: min(200px, 100%); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
-.source-picker header { padding: 3px 6px 6px; color: var(--muted); font-size: 12px; }
-.source-picker button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px; border: 0; background: transparent; color: var(--text); font-size: 13px; }
-.source-picker button:hover, .source-picker button:focus-visible { background: var(--panel-soft); }
+.accompaniment-lab { max-width: 680px; padding-bottom: 40px; }
+.card-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 222px)); width: min(100%, 464px); gap: 20px; }
+.participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
+.card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
+.media-badges { position: absolute; right: 7px; bottom: 6px; display: flex; align-items: center; gap: 4px; }
+.media-badge { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 5px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
+.own-badge { display: grid; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) ease; }
+.participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing { opacity: 1; pointer-events: auto; }
+.own-badge span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.own-badge svg, .remote-badge svg { color: var(--accent); }
+.own-badge .stop-label, .own-badge:is(:hover,:focus-visible) .source-label { visibility: hidden; }
+.own-badge:is(:hover,:focus-visible) .stop-label { visibility: visible; }
+.remote-badge, .muted-badge { min-width: 22px; padding-inline: 4px; }
+.remote-label { display: none; }
+.remote-badge:is(:hover,:focus) .remote-label { display: inline; }
+.screen-preview { display: grid; justify-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.scenario-controls { padding-top: 12px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 13px; }
+.scenario-controls summary { width: fit-content; cursor: pointer; }
+.scenario-controls fieldset { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0; padding: 0; border: 0; }
+.scenario-controls legend { margin-bottom: 4px; }
+.scenario-controls label, .screen-options label { display: inline-flex; gap: 5px; align-items: center; }
+.scenario-controls > label { margin-right: 12px; }
+.sources, .screen-options { display: grid; gap: 8px; margin: 18px 0; }
+.sources button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 8px 10px; background: var(--panel-soft); text-align: left; }
+.sources button:is(:hover,:focus-visible) { border-color: var(--accent); }
+.sources strong, .sources small { display: block; }
+.sources small, .sources p, .screen-options p { margin: 0; color: var(--muted); }
+.app-symbol { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 8px; color: var(--muted); background: var(--panel-raised); }
+.app-symbol.player { color: #145d33; background: #a9df64; }
+.app-symbol.browser { border-radius: 50%; background: conic-gradient(from -60deg,#df574b 0 33%,#e8be53 33% 66%,#58a16c 66%); }
+.app-symbol.browser i { width: 15px; height: 15px; background: #467bc1; border: 2px solid #e7ebee; border-radius: 50%; }
+.picker-error { color: var(--danger); }
+@media (hover: none), (pointer: coarse) { .own-badge { opacity: 1; pointer-events: auto; } }
+@media (max-width: 480px) { .card-pair { grid-template-columns: minmax(0, 222px); } }
+@media (prefers-reduced-motion: reduce) { .own-badge { transition: none; } }
 </style>
