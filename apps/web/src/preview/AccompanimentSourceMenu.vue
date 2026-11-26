@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
-import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
+import { autoUpdate, computePosition, flip, offset, shift, size } from '@floating-ui/dom';
 import { ChevronLeft, ChevronRight } from '@lucide/vue';
 
 interface Source { id: string; name: string; icon?: string; browser?: boolean; common?: boolean }
@@ -41,11 +41,17 @@ function dismissOutside(event: Event) {
 
 onMounted(() => {
   const element = root.value!;
+  const card = props.anchor.closest<HTMLElement>('.participant-card')!;
   let placed = false;
-  stopPositioning = autoUpdate(props.anchor, element, async () => {
+  stopPositioning = autoUpdate(card, element, async () => {
     const request = ++calculation;
-    const { x, y } = await computePosition(props.anchor, element, {
-      strategy: 'fixed', placement: 'bottom-start', middleware: [offset(6), flip({ padding: 8 }), shift({ padding: 8 })],
+    const { x, y } = await computePosition(card, element, {
+      strategy: 'fixed', placement: 'bottom-start', middleware: [
+        offset(6), flip({ padding: 8 }), shift({ padding: 8 }),
+        size({ padding: 8, apply({ rects, availableWidth }) {
+          element.style.width = Math.min(rects.reference.width, availableWidth) + 'px';
+        } }),
+      ],
     });
     if (request !== calculation) return;
     Object.assign(element.style, { left: x + 'px', top: y + 'px', visibility: 'visible' });
