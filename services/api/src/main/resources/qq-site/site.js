@@ -70,8 +70,8 @@ async function resultPage() {
   identity(result.nickname, result.avatar);
   byId('account-title').textContent = result.purpose === 'BIND' ? '确认绑定 QQ' : '确认你的账号';
   byId('account-description').textContent = '请核对本次授权的 QQ 昵称和头像。';
-  byId('result-actions').hidden = false;
   if (result.desktop) {
+    byId('result-actions').hidden = false;
     byId('confirm-login').hidden = true;
     byId('return-app').hidden = false;
     byId('return-app').href = 'lycansync://qq?server=' + encodeURIComponent(location.origin) + '#request=' + request;
@@ -79,7 +79,16 @@ async function resultPage() {
     return;
   }
   const verifier = sessionStorage.getItem('lycan-qq:' + request);
-  if (!verifier) throw new Error('请回到发起登录的浏览器继续，或重新登录。');
+  if (!verifier) {
+    byId('confirm-login').hidden = true;
+    const restart = byId('return-app');
+    restart.textContent = '重新登录';
+    restart.href = '/account';
+    restart.hidden = false;
+    byId('result-actions').hidden = false;
+    throw new Error('请回到发起登录的浏览器继续，或重新登录。');
+  }
+  byId('result-actions').hidden = false;
   feedback('确认后登录 lycanclaw，不会自动加入群组。');
   byId('confirm-login').onclick = async () => {
     if (confirming) return;

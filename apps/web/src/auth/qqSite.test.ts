@@ -5,12 +5,12 @@ import { describe, expect, test, vi } from 'vitest';
 const script = readFileSync(new URL('../../../../services/api/src/main/resources/qq-site/site.js', import.meta.url), 'utf8');
 const request = 'r'.repeat(43);
 
-async function website(signature: string) {
+async function website(signature: string, verifier: string | null = 'v'.repeat(43)) {
   const identifiers = ['qq-login', 'feedback', 'identity', 'nickname', 'avatar', 'account-title', 'account-description',
     'result-actions', 'confirm-login', 'return-app', 'profile-form', 'profile-nickname', 'profile-signature', 'logout'];
   const buttons = [{ disabled: false }, { disabled: false }];
   const elements = Object.fromEntries(identifiers.map(id => [id, {
-    value: '', textContent: '', hidden: false, disabled: false, src: '', onclick: undefined as (() => Promise<void>) | undefined,
+    value: '', textContent: '', hidden: false, disabled: false, src: '', href: '', onclick: undefined as (() => Promise<void>) | undefined,
     classList: { toggle: vi.fn() },
     listeners: {} as Record<string, (event: { preventDefault(): void }) => Promise<void>>,
     addEventListener(event: string, callback: (event: { preventDefault(): void }) => Promise<void>) { this.listeners[event] = callback; },
@@ -32,12 +32,16 @@ async function website(signature: string) {
   runInNewContext(script, {
     document: { getElementById: (id: string) => elements[id], body: { classList: { add: vi.fn() } } },
     location: { pathname: '/qq/result', hash: '#request=' + request, origin: 'https://synthetic.example' },
-    history: { replaceState: vi.fn() }, sessionStorage: { getItem: () => 'v'.repeat(43), removeItem: vi.fn() },
+    history: { replaceState: vi.fn() }, sessionStorage: { getItem: () => verifier, removeItem: vi.fn() },
     fetch: fetchMock, URLSearchParams, AbortSignal, Error,
   });
-  await vi.waitFor(() => expect(elements['confirm-login']!.onclick).toBeTypeOf('function'));
-  await elements['confirm-login']!.onclick!();
-  expect(elements['profile-signature']!.value).toBe(signature);
+  if (verifier) {
+    await vi.waitFor(() => expect(elements['confirm-login']!.onclick).toBeTypeOf('function'));
+    await elements['confirm-login']!.onclick!();
+    expect(elements['profile-signature']!.value).toBe(signature);
+  } else {
+    await vi.waitFor(() => expect(elements.feedback!.textContent).toContain('回到发起登录的浏览器'));
+  }
   return {
     elements, fetchMock, buttons,
     submit: () => elements['profile-form']!.listeners.submit!({ preventDefault: vi.fn() }),
@@ -46,6 +50,12 @@ async function website(signature: string) {
 }
 
 describe('官网账号资料保存', () => {
+  test('换浏览器打开授权结果只能重新登录，不能提交缺少校验值的请求', async () => {
+    const { elements, fetchMock } = await website('', null);
+    expect(elements['confirm-login']!.hidden).toBe(true);
+    expect(elements['return-app']).toMatchObject({ hidden: false, textContent: '重新登录', href: '/account' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   test('旧长签名保持原文，只改昵称时省略签名并正常保存', async () => {
     const legacy = '旧'.repeat(120);
     const state = await website(legacy);
