@@ -21,7 +21,7 @@ const active = ref<Channel>();
 // 手势行程独立于图形宽度，短刻度仍然允许稳定拖动。
 const dragTravel = 84;
 let timer: ReturnType<typeof setTimeout> | undefined;
-let iconDrag: { id: number; x: number; initial: number; moved: boolean } | undefined;
+let iconDrag: { id: number; x: number; y: number; initial: number; moved: boolean } | undefined;
 let suppressClick = false;
 let wheelPixels = 0;
 
@@ -70,18 +70,18 @@ function begin(channel: Channel, event: PointerEvent) {
   const button = event.currentTarget as HTMLElement;
   show(channel);
   suppressClick = false;
-  iconDrag = { id: event.pointerId, x: event.clientX, initial: volume.value[channel], moved: false };
+  iconDrag = { id: event.pointerId, x: event.clientX, y: event.clientY, initial: volume.value[channel], moved: false };
   button.setPointerCapture(event.pointerId);
 }
 function move(channel: Channel, event: PointerEvent) {
   if (!iconDrag || iconDrag.id !== event.pointerId) return;
-  const dx = event.clientX - iconDrag.x;
-  if (!iconDrag.moved && Math.abs(dx) < 3) return;
+  const upward = iconDrag.y - event.clientY;
+  if (!iconDrag.moved && Math.hypot(event.clientX - iconDrag.x, upward) < 3) return;
   iconDrag.moved = true;
-  const available = dx > 0 ? document.documentElement.clientWidth - iconDrag.x - 1 : iconDrag.x;
-  const remaining = dx > 0 ? maxima[channel] - iconDrag.initial : iconDrag.initial;
+  const available = upward > 0 ? iconDrag.y : document.documentElement.clientHeight - iconDrag.y - 1;
+  const remaining = upward > 0 ? maxima[channel] - iconDrag.initial : iconDrag.initial;
   const distance = Math.max(1, Math.min(available, dragTravel * remaining / maxima[channel]));
-  setVolume(channel, iconDrag.initial + dx * remaining / distance);
+  setVolume(channel, iconDrag.initial + upward * remaining / distance);
 }
 function finish(event: PointerEvent) {
   if (!iconDrag || iconDrag.id !== event.pointerId) return;
@@ -114,7 +114,7 @@ onScopeDispose(close);
   <section class="volume-lab" aria-labelledby="volume-title">
     <h1 id="volume-title">成员卡片音量</h1>
     <SegmentedControl v-model="mode" :options="modes" label="展开方式" />
-    <p>指向图标查看音量，左右拖动或用滚轮微调，单击静音或恢复。</p>
+    <p>按住图标向上拖增大音量，向下拖减小。滚轮微调，单击静音或恢复。</p>
     <div class="volume-stage" :class="{ 'at-edge': atEdge }">
       <article class="participant-card">
         <div class="participant-media">
@@ -127,7 +127,7 @@ onScopeDispose(close);
           <button v-for="channel in channels" :key="channel" type="button"
             class="participant-state participant-state-button volume-control" :class="{ 'is-off': volume[channel] === 0 }"
             :aria-label="names[channel] + '，' + Math.round(volume[channel] * 100) + '%'" :aria-pressed="volume[channel] === 0"
-            aria-description="左右拖动或滚轮调节，方向键微调，单击静音或恢复"
+            aria-description="向上拖动增大音量，向下拖动减小音量，滚轮或方向键微调，单击静音或恢复"
             @pointerenter="enter(channel, $event)" @pointerleave="leave" @wheel="wheel(channel, $event)"
             @focus="($event.currentTarget as HTMLElement).matches(':focus-visible') && show(channel)" @blur="close"
             @keydown="arrow(channel, $event)" @keydown.esc.prevent="close"
