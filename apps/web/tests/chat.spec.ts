@@ -67,13 +67,8 @@ test('跨消息复制完整记录和附件说明，单段文字仍按选区复�
   await page.goto('/');
   await expect(page.locator('article[data-message-id]')).toHaveCount(records.length);
   await expect(page.locator('[inert] .message-list')).toHaveCount(0);
-  async function copy(first: string, last: string) {
-    await page.evaluate(([from, to]) => {
-      const textNode = (selector: string) => Array.from(document.querySelector(selector)!.childNodes)
-        .find(node => node.nodeType === Node.TEXT_NODE && node.textContent!.length > 0)!;
-      const start = textNode(from), end = textNode(to);
-      (document.activeElement as HTMLElement | null)?.blur();
-      window.getSelection()!.setBaseAndExtent(start, 1, end, 3);
+  async function copy() {
+    await page.evaluate(() => {
       // 使用真实快捷键的派发目标，在内存剪贴板中检查结果。
       document.addEventListener('copy', event => {
         event.preventDefault();
@@ -82,19 +77,44 @@ test('跨消息复制完整记录和附件说明，单段文字仍按选区复�
         const handled = !event.target!.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData }));
         document.body.dataset.copied = handled ? clipboardData.getData('text/plain') : window.getSelection()!.toString();
       }, { capture: true, once: true });
-    }, [first, last]);
+    });
     await page.keyboard.press('Control+c');
     return page.locator('body').getAttribute('data-copied');
   }
   const first = '[data-message-id="A02"] .chat-message-content';
   const last = '[data-message-id="A06"] .chat-message-content';
-  const transcript = await copy(last, first);
+  const textBox = async (selector: string) => page.locator(selector).evaluate(element => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const box = range.getBoundingClientRect();
+    return { left: box.left, right: box.right, middle: box.top + box.height / 2, bottom: element.getBoundingClientRect().bottom };
+  });
+  const drag = async (x: number, y: number, endX: number, endY: number) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(endX, endY, { steps: 12 });
+    await page.mouse.up();
+  };
+  await page.locator(first).scrollIntoViewIfNeeded();
+  const start = await textBox(first), end = await textBox(last);
+  for (const [x, y] of [[end.right - 1, end.middle], [end.right + 24, end.middle], [end.right + 24, end.bottom + 3]]) {
+    await drag(x, y, end.left, end.middle);
+    expect((await page.evaluate(() => getSelection()!.toString())).trim()).toBe('A消息 6');
+    await page.mouse.click(end.left, end.middle);
+  }
+  await drag(end.right + 24, end.middle, start.left + 4, start.middle);
+  const transcript = await copy();
   const entries = transcript!.split('\n\n');
   expect(entries.map(entry => entry.slice(entry.indexOf('\n') + 1))).toEqual([
     'A消息 2', '[图片]', '第二局\n[视频] 合练.mp4', '[文件] 战术.txt', 'A消息 6']);
   expect(entries[0]).toMatch(/^群主  .*2026.*:\d{2}:02\n/);
   expect(entries.at(-1)).toMatch(/^队友  .*:\d{2}:06\n/);
-  expect(await copy(first, first)).toBe('消息');
+  await page.mouse.click(end.left, end.middle);
+  await drag(end.right - 1, end.middle, end.right - 7, end.middle);
+  expect(await copy()).toBe('6');
+  const name = await textBox('[data-message-id="A06"] .chat-message-meta strong');
+  await drag(name.right + 3, name.middle, name.left, name.middle);
+  expect((await copy())?.trim()).toBe('队友');
 });
 
 test('长文本输入和清空平滑伸缩，发送后随输入框收起完整抵达最新消息', async ({ page }) => {

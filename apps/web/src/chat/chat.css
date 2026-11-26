@@ -37,6 +37,7 @@
 @media (max-width: 600px) { .chat-heading:has(.chat-sync-status) .chat-title { display: none; } }
 
 .message-list {
+  user-select: text;
   --chat-covered-height: max(0px, var(--voice-overlay-height, 0px) - var(--chat-list-offset, 0px));
   flex: 1;
   font-size: var(--chat-font-size);
@@ -57,6 +58,7 @@
 /* 短对话贴底，长对话从顶部正常滚动，避免 flex-end 把早期消息推到不可达区域。 */
 .message-list > :first-child { margin-top: auto; }
 .message-list > * { flex-shrink: 0; }
+.message-list :is(.chat-message-avatar, .chat-date-divider, .chat-initial-state, .chat-history-state, button) { user-select: none; }
 
 .chat-date-divider {
   display: flex;
@@ -78,7 +80,8 @@
 .chat-message-body { min-width: 0; flex: 1; }
 .chat-historical-sender { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: bold; cursor: pointer; }
 .chat-historical-sender:hover { text-decoration: underline; }
-.chat-message-meta { display: flex; align-items: center; gap: 9px; user-select: text; cursor: text; }
+.chat-message-meta { display: flex; align-items: center; gap: 9px; cursor: text; }
+.chat-message-meta button.chat-historical-sender { user-select: text; }
 .chat-message-meta strong { font-size: 15px; line-height: 1.25; }
 .chat-message-meta time { color: var(--subtle); font-size: 11px; }
 .chat-message-main { position: relative; display: flow-root; }
