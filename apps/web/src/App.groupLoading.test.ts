@@ -86,7 +86,7 @@ function setup() {
     voicePreview: { forget: vi.fn() },
     joinedGroupId: ref<string | null>('one'), joiningGroupId: ref<string | null>(null),
     joinedGroupDetail: ref<GroupDetail | null>(detail('one')), management: ref<{ group: GroupDetail } | null>(null),
-    groupError: ref(''), groupLoading: ref(false), detailRequest: null,
+    groupError: ref(''), groupLoading: ref(false), detailRequests: new Map<string, AbortController>(),
     pendingSwitchGroupId: ref<string | null>(null), viewerNotice: ref(''),
     findGroup: vi.fn((_id: string, _signal: AbortSignal) => request.promise),
     leaveVoice: vi.fn(), refreshGroups: vi.fn(async () => {}), refreshRoomOccupancies: vi.fn(async () => {}),
@@ -182,6 +182,7 @@ it('当前群读取失败仍显示错误，404 清除对应管理窗口并退出
 
 it('新资料请求取消旧请求，旧结果不清除新请求的加载状态', async () => {
   const { state, load, request } = setup();
+  state.joinedGroupId.value = null;
   const old = load('one');
   const signal = state.findGroup.mock.calls[0][1];
   const current = deferred<GroupDetail>();

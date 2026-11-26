@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { transpileModule } from 'typescript';
+import { ScriptTarget, transpileModule } from 'typescript';
 import { expect, it, vi } from 'vitest';
 
 const source = readFileSync(new URL('./App.vue', import.meta.url), 'utf8');
 const start = source.indexOf('async function joinGroup(');
 const end = source.indexOf('function requestJoin(', start);
-const script = transpileModule(source.slice(start, end), {}).outputText;
+const detailStart = source.indexOf('async function loadGroup(');
+const detailEnd = source.indexOf('function retryGroupSync(', detailStart);
+const script = transpileModule(source.slice(start, end) + source.slice(detailStart, detailEnd),
+  { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -17,6 +20,9 @@ function deferred<T>() {
 
 function joining() {
   const context = {
+    performance, AbortController, Error, ApiRequestError: class extends Error {},
+    detailRequests: new Map<string, AbortController>(), groupLoading: { value: false }, groupError: { value: '' },
+    management: { value: null }, accountCache: { revision: 0, read: vi.fn(async () => null), write: vi.fn() },
     joinAttempt: 0, selectCaptureSource: vi.fn(), viewingWindows: { value: { closeAll: vi.fn() } },
     selectedGroupId: { value: '' }, pendingSwitchGroupId: { value: null }, joiningGroupId: { value: '' as string | null },
     viewerNotice: { value: '' },
@@ -73,7 +79,7 @@ it.each(['success', 'failure'])('旧群成员查询迟到 %s 不覆盖新群资�
   expect(context.joinedGroupId.value).toBe('current');
   expect(context.joinedGroupDetail.value).toEqual({ id: 'current' });
   expect(context.viewerNotice.value).toBe('');
-  expect(context.rtc.join).toHaveBeenCalledTimes(1);
+  expect(context.rtc.join.mock.calls.map(([id]) => id)).toEqual(['old', 'current']);
 });
 
 it('旧离房等待完成不清空后来已加入的群组', async () => {

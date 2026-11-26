@@ -36,7 +36,7 @@ function setup() {
   const scope = effectScope();
   scopes.push(scope);
   const state = { selectedGroupId: ref<string | null>('one'), selectedGroupDetail: ref<GroupDetail | null>(detail('one')),
-    joinedGroupId: ref<string | null>(null), joinedGroupDetail: ref<GroupDetail | null>(null), groups: ref([detail('one')]),
+    joiningGroupId: ref<string | null>(null), joinedGroupId: ref<string | null>(null), joinedGroupDetail: ref<GroupDetail | null>(null), groups: ref([detail('one')]),
     editorOpen: ref(false), editingGroup: ref<GroupDetail | null>(null),
     management: ref<{ group: GroupDetail; mode: string } | null>(null), groupError: ref(''), groupLoading: ref(false),
     accountCache: { revision: 0, read: vi.fn(async () => null), write: vi.fn() }, ApiRequestError: class extends Error {},
@@ -45,7 +45,7 @@ function setup() {
     createGroup: vi.fn(async () => detail('created')), updateGroup: vi.fn(async () => detail('one')),
     refreshGroups: vi.fn(async () => {}), groupPresences: ref({}), presenceConnectionLost: ref(false),
     joinAttempt: 0, selectCaptureSource: vi.fn(), removeCloseListener: null,
-    detailRequest: null, listRequest: null, rtc: { leave: vi.fn(async () => {}) },
+    detailRequests: new Map<string, AbortController>(), listRequest: null, rtc: { leave: vi.fn(async () => {}) },
   };
   // 执行 App 正式弹窗回调、切群监听及销毁清理；只替代 HTTP 和 RTC 边界。
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')} })`, {
