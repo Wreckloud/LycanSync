@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import voiceRoomPreview from './voice-room.html?raw';
 import MemberVolumePreview from './MemberVolumePreview.vue';
+import AccompanimentPreview from './AccompanimentPreview.vue';
 import { computed, nextTick, onScopeDispose, ref } from 'vue';
 import { ArrowRight, Check, ChevronDown, Headphones, Mic, Monitor, Settings, UserRound, X } from '@lucide/vue';
 import IconButton from '../components/IconButton.vue';
@@ -31,9 +32,9 @@ import type { VoiceMode } from '../settings/useAudioShortcuts';
 import type { PresenceMode } from '../presence/usePresencePreference';
 import type { GroupSummary } from '../group/groupApi';
 
-type PreviewTab = 'compare' | 'gallery' | 'coverage' | 'volume';
-const tab = ref<PreviewTab>(location.hash === '#member-volume' ? 'volume' : 'compare');
-const tabs = [{ id: 'volume', label: '成员音量 · 手感对照' }, { id: 'compare', label: '哪里要改 · 前后对照' }, { id: 'gallery', label: '全控件 · 点击体验' }, { id: 'coverage', label: '全部组件 · 覆盖范围' }] as const;
+type PreviewTab = 'compare' | 'gallery' | 'coverage' | 'volume' | 'accompaniment';
+const tab = ref<PreviewTab>(location.hash === '#accompaniment' ? 'accompaniment' : location.hash === '#member-volume' ? 'volume' : 'compare');
+const tabs = [{ id: 'accompaniment', label: '伴奏分享' }, { id: 'volume', label: '成员音量 · 手感对照' }, { id: 'compare', label: '哪里要改 · 前后对照' }, { id: 'gallery', label: '全控件 · 点击体验' }, { id: 'coverage', label: '全部组件 · 覆盖范围' }] as const;
 const text = ref('和朋友一起玩游戏');
 const signature = ref('这是一段较长的签名，用来检查换行、字数与输入区域。');
 const password = ref('preview-only');
@@ -123,7 +124,7 @@ async function showComponent(name: string) {
   <main class="preview-page" :class="{ 'volume-preview-page': tab === 'volume' }">
     <header class="preview-header">
       <div class="preview-wordmark"><span class="preview-mark"><Check :size="19" /></span> LycanSync <span>界面收尾检查</span></div>
-      <div v-if="tab !== 'volume'" class="preview-intro"><div><p class="preview-eyebrow">保留现在的风格，把差异看清楚</p><h1>控件预览与调整对照</h1>
+      <div v-if="tab !== 'volume' && tab !== 'accompaniment'" class="preview-intro"><div><p class="preview-eyebrow">保留现在的风格，把差异看清楚</p><h1>控件预览与调整对照</h1>
         <p>先看哪里真的有问题，再决定要不要改。封装只是整理代码时，外观可以保持完全一致。</p></div><span class="preview-local">本地预览 · 不连接账号或设备</span></div>
       <nav class="preview-tabs" aria-label="检查页面">
         <button v-for="item in tabs" :key="item.id" type="button" :aria-current="tab === item.id ? 'page' : undefined" @click="tab = item.id">{{ item.label }}</button>
@@ -131,6 +132,7 @@ async function showComponent(name: string) {
     </header>
 
     <MemberVolumePreview v-if="tab === 'volume'" />
+    <AccompanimentPreview v-if="tab === 'accompaniment'" />
     <section v-if="tab === 'compare'" class="preview-content" aria-label="调整前后对照">
       <div class="preview-section-heading"><h2>不是每一处都需要改外观</h2><p>圆角、键盘焦点和等待提示已应用；头像及弹窗已整理。调整前快照只留在此检查页，开关标题保持原操作。</p></div>
       <article class="preview-comparison" id="compare-buttons">
@@ -207,7 +209,7 @@ async function showComponent(name: string) {
       <div class="preview-table-wrap"><table><thead><tr><th>组件</th><th>当前覆盖</th><th>边界与待验收内容</th></tr></thead><tbody><tr v-for="item in filteredCatalog" :key="item.path"><td><strong>{{ item.name }}</strong><small>{{ item.path }}</small></td><td><button v-if="item.target" type="button" class="preview-text-action" @click="showComponent(item.name)">{{ item.status }} <ArrowRight :size="13" /></button><span v-else>{{ item.status }}</span></td><td>{{ item.reason }}</td></tr></tbody></table></div>
       <button type="button" class="settings-button" :aria-expanded="sourceExpanded" @click="sourceExpanded = !sourceExpanded">查看本页的验证边界</button><ExpandSection :open="sourceExpanded"><p class="preview-boundary">本页不导入 AuthRoot，不执行清单中的业务组件 loader，不访问 API、不读取账号、不采集或发布媒体。建议样式以 preview 前缀限制在本页。此页面不加入正式构建入口。它覆盖控件检查，不代替完整账号、通话、权限、媒体与性能验收。</p></ExpandSection>
     </section>
-    <footer v-if="tab !== 'volume'" class="preview-footer"><Monitor :size="15" /> 已确认的圆角、键盘焦点、等待时机与内部整理已应用。开关标题保留原行为，其余新想法仍需单独确认。</footer>
+    <footer v-if="tab !== 'volume' && tab !== 'accompaniment'" class="preview-footer"><Monitor :size="15" /> 已确认的圆角、键盘焦点、等待时机与内部整理已应用。开关标题保留原行为，其余新想法仍需单独确认。</footer>
   </main>
   <AppNotice v-if="notice" :key="notice.message" :message="notice.message" :kind="notice.kind" @dismiss="notice = null" />
   <DialogTransition><UpdateRestartDialog v-if="dialog === 'update'" version="0.5.5" :busy="false" :error="dialogError" @cancel="dialog = null" @confirm="inspectDialog" /></DialogTransition>
