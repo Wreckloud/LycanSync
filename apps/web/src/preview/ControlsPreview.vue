@@ -33,7 +33,7 @@ import type { GroupSummary } from '../group/groupApi';
 
 type PreviewTab = 'compare' | 'gallery' | 'coverage' | 'volume';
 const tab = ref<PreviewTab>(location.hash === '#member-volume' ? 'volume' : 'compare');
-const tabs = [{ id: 'volume', label: '成员音量 · A/B' }, { id: 'compare', label: '哪里要改 · 前后对照' }, { id: 'gallery', label: '全控件 · 点击体验' }, { id: 'coverage', label: '全部组件 · 覆盖范围' }] as const;
+const tabs = [{ id: 'volume', label: '成员音量 · 手感对照' }, { id: 'compare', label: '哪里要改 · 前后对照' }, { id: 'gallery', label: '全控件 · 点击体验' }, { id: 'coverage', label: '全部组件 · 覆盖范围' }] as const;
 const text = ref('和朋友一起玩游戏');
 const signature = ref('这是一段较长的签名，用来检查换行、字数与输入区域。');
 const password = ref('preview-only');
