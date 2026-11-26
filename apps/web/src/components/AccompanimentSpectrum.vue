@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref, watchEffect } from 'vue';
 
-const props = defineProps<{ track: MediaStreamTrack; context: AudioContext }>();
+const props = defineProps<{ track: MediaStreamTrack; context: AudioContext; responsive?: boolean }>();
 const surface = ref<HTMLElement>();
 const visible = ref(false);
 const foreground = ref(!document.hidden);
@@ -27,7 +27,13 @@ watchEffect(onCleanup => {
   if (!element || !visible.value || !foreground.value || reduced.value || props.context.state === 'closed') return;
   const context = props.context;
   const analyser = context.createAnalyser();
-  analyser.fftSize = 1024;
+  const responsive = props.responsive;
+  analyser.fftSize = responsive ? 2048 : 1024;
+  if (responsive) {
+    analyser.minDecibels = -78;
+    analyser.maxDecibels = -18;
+    analyser.smoothingTimeConstant = .4;
+  }
   const input = context.createMediaStreamSource(new MediaStream([props.track]));
   // 只读取频谱，同一轨道的实际播放与音量继续由房间管理。
   input.connect(analyser);
@@ -42,7 +48,8 @@ watchEffect(onCleanup => {
     bars.forEach((bar, i) => {
       let level = 0;
       for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
-      const height = 4 + Math.round(level / 255 * 50);
+      const strength = level / 255;
+      const height = 4 + Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
       if (height >= peaks[i]) { peaks[i] = height; hold[i] = 3; }
       else if (hold[i] > 0) hold[i]--;
       else peaks[i] = Math.max(height, peaks[i] - 5);

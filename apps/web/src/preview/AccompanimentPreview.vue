@@ -3,6 +3,7 @@ import { computed, nextTick, ref } from 'vue';
 import { HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
 import AccompanimentSourceMenu from '../components/AccompanimentSourceMenu.vue';
 import AccompanimentBadge from '../components/AccompanimentBadge.vue';
+import SpectrumListeningPreview from './SpectrumListeningPreview.vue';
 import DialogTransition from '../components/DialogTransition.vue';
 import MemberVolumeButton from '../components/MemberVolumeButton.vue';
 import VoiceLevelMic from '../components/VoiceLevelMic.vue';
@@ -104,6 +105,7 @@ function setSourceOpen(source: Source, open: boolean) {
 
 <template>
   <section class="preview-content accompaniment-lab" aria-labelledby="accompaniment-title">
+    <SpectrumListeningPreview />
     <header class="preview-section-heading">
       <h2 id="accompaniment-title">分享伴奏</h2>
       <p>指向自己的卡片，点头像左下角的「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
