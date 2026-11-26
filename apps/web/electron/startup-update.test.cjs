@@ -1,10 +1,13 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
+const { existsSync, readFileSync } = require('node:fs');
+const { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } = require('node:fs/promises');
+const { dirname, join, resolve } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
-const { createStartupUpdate, updateFeedUrl, parseInstallTiming } = require('./startup-update.cjs');
+const { DownloadedUpdateHelper } = require('electron-updater/out/DownloadedUpdateHelper');
+const { createStartupUpdate, updateFeedUrl, parseInstallTiming, removeInstalledUpdateDownload } = require('./startup-update.cjs');
 
 function deferred() {
   let resolve;
@@ -46,6 +49,29 @@ function fixture(options = {}) {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+async function installedUpdateFixture(t) {
+  const parent = resolve(__dirname, '../../../release/test-cache/updater');
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, 'installed-'));
+  t.after(async () => {
+    assert.equal(dirname(root), parent);
+    await rm(root, { recursive: true, force: true });
+  });
+  const helper = new DownloadedUpdateHelper(join(root, 'package-updater'));
+  const pending = helper.cacheDirForPendingUpdate;
+  await mkdir(pending, { recursive: true });
+  const version = '0.0.3';
+  const fileName = `LycanSync-${version}-windows-x64-setup.exe`;
+  const baseline = join(helper.cacheDir, 'installer.exe');
+  const downloaded = join(pending, fileName);
+  const contents = Buffer.from('verified installer');
+  const fileInfo = { info: { sha512: createHash('sha512').update(contents).digest('base64') } };
+  await writeFile(baseline, contents);
+  await writeFile(downloaded, contents);
+  await helper.setDownloadedFile(downloaded, null, { version }, fileInfo, fileName, true);
+  return { root, helper, pending, version, baseline, downloaded, contents, fileInfo };
+}
+
 test('诊断写入挂起时无更新仍立即可用，安装继续等待必要的收尾', async () => {
   const log = deferred();
   const prepare = deferred();
@@ -72,9 +98,13 @@ test('诊断写入挂起时无更新仍立即可用，安装继续等待必要�
   } finally { log.resolve(); prepare.resolve(); }
 });
 
-test('更新缓存固定在运行目录，不读取系统本地应用数据目录', async () => {
-  const cachePath = join('D:', 'LycanSync', 'data', 'updater');
-  const f = fixture({ updaterCachePath: cachePath });
+test('启动立即放行，后台只回收已安装版本的副本并保留差分基准和块表', async t => {
+  const disk = await installedUpdateFixture(t);
+  const f = fixture({ updaterCachePath: disk.root });
+  const helperReady = deferred();
+  f.updater.getOrCreateDownloadHelper = () => helperReady.promise;
+  const blockmap = join(disk.pending, 'current.blockmap');
+  await writeFile(blockmap, 'blockmap');
   let reads = 0;
   f.updater.app = {};
   Object.defineProperty(f.updater.app, 'baseCachePath', {
@@ -84,8 +114,51 @@ test('更新缓存固定在运行目录，不读取系统本地应用数据目�
   const started = f.startup.start();
   f.checks.resolve({ isUpdateAvailable: false });
   assert.equal((await started).phase, 'ready');
-  assert.equal(f.updater.app.baseCachePath, cachePath);
+  assert.equal(f.updater.app.baseCachePath, disk.root);
   assert.equal(reads, 0);
+  assert.ok(existsSync(disk.downloaded));
+  helperReady.resolve(disk.helper);
+  await t.waitFor(() => assert.equal(existsSync(disk.downloaded), false));
+  assert.deepEqual(await readFile(disk.baseline), disk.contents);
+  assert.equal(await readFile(blockmap, 'utf8'), 'blockmap');
+  await removeInstalledUpdateDownload(disk.root, disk.helper.cacheDir, disk.version);
+});
+
+test('安装失败仍运行旧版时，SDK 下次仍可复用已校验的新包', async t => {
+  const disk = await installedUpdateFixture(t);
+  await removeInstalledUpdateDownload(disk.root, disk.helper.cacheDir, '0.0.2');
+  const restarted = new DownloadedUpdateHelper(disk.helper.cacheDir);
+  assert.equal(await restarted.getValidCachedUpdateFile(disk.fileInfo, { info() {} }), disk.downloaded);
+});
+
+test('基准包缺失、同大小内容不一致或下载记录属于另一版本时均保留副本', async t => {
+  const disk = await installedUpdateFixture(t);
+  const cleanup = () => removeInstalledUpdateDownload(disk.root, disk.helper.cacheDir, disk.version);
+  const damaged = Buffer.alloc(disk.contents.length, 1);
+  await unlink(disk.baseline);
+  await cleanup();
+  await writeFile(disk.baseline, damaged);
+  await cleanup();
+  assert.deepEqual(await readFile(disk.downloaded), disk.contents);
+  await writeFile(disk.baseline, disk.contents);
+  await writeFile(disk.downloaded, damaged);
+  await cleanup();
+  assert.deepEqual(await readFile(disk.downloaded), damaged);
+  await writeFile(disk.downloaded, disk.contents);
+  await writeFile(disk.helper.getUpdateInfoFile(), JSON.stringify({ fileName: 'future.exe', ...disk.fileInfo.info }));
+  await cleanup();
+  assert.deepEqual(await readFile(disk.downloaded), disk.contents);
+});
+
+test('下载目录被重定向或 SDK 缓存位于运行目录之外时跳过回收', async t => {
+  const disk = await installedUpdateFixture(t);
+  await removeInstalledUpdateDownload(join(disk.root, 'other'), disk.helper.cacheDir, disk.version);
+  assert.ok(existsSync(disk.downloaded));
+  const foreign = join(disk.root, 'foreign');
+  await rename(disk.pending, foreign);
+  await symlink(foreign, disk.pending, process.platform === 'win32' ? 'junction' : 'dir');
+  await removeInstalledUpdateDownload(disk.root, disk.helper.cacheDir, disk.version);
+  assert.deepEqual(await readFile(disk.downloaded), disk.contents);
 });
 
 test('更新源只接受无凭据的 HTTPS 目录，不接受业务服务器输入的 HTTP 地址', () => {

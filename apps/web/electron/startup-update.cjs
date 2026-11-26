@@ -1,3 +1,48 @@
+const { createHash } = require('node:crypto');
+const { createReadStream } = require('node:fs');
+const { lstat, readFile, realpath, unlink } = require('node:fs/promises');
+const { basename, join, relative } = require('node:path');
+
+async function installerSha512(file) {
+  const hash = createHash('sha512');
+  for await (const chunk of createReadStream(file, { highWaterMark: 1024 * 1024 })) hash.update(chunk);
+  return hash.digest('base64');
+}
+
+async function stillSameInstaller(file, checked) {
+  const latest = await lstat(file, { bigint: true });
+  return latest.ino === checked.ino && latest.dev === checked.dev
+    && latest.ctimeNs === checked.ctimeNs && latest.size === checked.size;
+}
+
+async function removeInstalledUpdateDownload(cacheRoot, cacheDir, version) {
+  const fileName = `LycanSync-${version}-windows-x64-setup.exe`;
+  if (basename(fileName) !== fileName || relative(cacheRoot, cacheDir) !== basename(cacheDir)) return;
+  const pendingDir = join(cacheDir, 'pending');
+  const downloaded = join(pendingDir, fileName);
+  const baseline = join(cacheDir, 'installer.exe');
+  const receipt = join(pendingDir, 'update-info.json');
+  try {
+    if (relative(pendingDir, await realpath(pendingDir))) return;
+    const candidate = await lstat(downloaded, { bigint: true });
+    if (!candidate.isFile() || !candidate.size) return;
+    const metadata = await lstat(receipt);
+    if (!metadata.isFile() || metadata.size > 4096) return;
+    const info = JSON.parse(await readFile(receipt, 'utf8'));
+    if (info?.fileName !== fileName || !/^[A-Za-z0-9+/]{86}==$/.test(info.sha512)) return;
+    const installed = await lstat(baseline, { bigint: true });
+    if (!installed.isFile() || installed.size !== candidate.size) return;
+    if (await installerSha512(baseline) !== info.sha512 || await installerSha512(downloaded) !== info.sha512) return;
+    // SDK 可能已开始下载另一个版本；只回收本次核对的文件，块表与下载记录由 SDK 管理。
+    if (relative(pendingDir, await realpath(pendingDir))) return;
+    if (await stillSameInstaller(baseline, installed) && await stillSameInstaller(downloaded, candidate)) {
+      await unlink(downloaded);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 function updateFeedUrl(value) {
   let url;
   try { url = new URL(value); } catch { throw new Error('打包时必须指定有效的 HTTPS 更新目录。'); }
@@ -147,6 +192,12 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
           publish({ intent: 'startup' });
           void checkAndInstall(++generation);
         }
+        // 登录入口先放行。只有本次已加载的更新器才需要检查自己的安装缓存。
+        void startupPromise.then(async () => {
+          if (!enabled || !updaterCachePath || !updater) return;
+          const { cacheDir } = await updater.getOrCreateDownloadHelper();
+          await removeInstalledUpdateDownload(updaterCachePath, cacheDir, version);
+        }).catch(error => console.warn('本次未能回收已安装的更新下载包', error.code ?? error.name));
       }
       return startupPromise;
     },
@@ -181,4 +232,4 @@ function parseInstallTiming(text, version) {
   return { stage: 'updateInstall', durationMs: Number(duration) };
 }
 
-module.exports = { updateFeedUrl, createStartupUpdate, parseInstallTiming };
+module.exports = { updateFeedUrl, createStartupUpdate, parseInstallTiming, removeInstalledUpdateDownload };
