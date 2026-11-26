@@ -22,8 +22,7 @@
   transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);
 }
 .surface-panel-enter-from, .surface-panel-leave-to { opacity: 0; transform: translateY(4px); }
-.surface-side-enter-from { opacity: 0; transform: translateX(-4px); }
-.surface-side-leave-to { opacity: 0; transform: translateX(4px); }
+.surface-side-enter-from, .surface-side-leave-to { opacity: 0; transform: translateX(-4px); }
 .surface-panel-leave-active, .surface-side-leave-active { pointer-events: none; }
 .group-menu-enter-active, .group-menu-leave-active {
   transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);

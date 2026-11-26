@@ -4,4 +4,6 @@
 .call-menu-action, .call-settings-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
 .call-menu-action:hover:not(:disabled), .call-settings-entry:hover { background: var(--panel-soft); }
 .call-menu-chevron, .call-settings-entry > svg:last-child { margin-left: auto; }
+.call-menu-action[aria-expanded] > .call-menu-chevron { flex: none; transition: transform var(--motion-surface-duration) var(--motion-ease); }
+.call-menu-action[aria-expanded='true'] > .call-menu-chevron { transform: rotate(180deg); }
 .call-submenu-back { width: 32px; justify-content: center; padding: 6px; }
