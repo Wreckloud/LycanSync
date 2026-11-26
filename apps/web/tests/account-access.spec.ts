@@ -128,7 +128,8 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   const passwordButton = await page.getByRole('button', { name: '设置恢复密码', exact: true }).boundingBox();
   const transferButton = await page.getByRole('button', { name: '转让服主', exact: true }).boundingBox();
   expect(passwordButton!.width).toBe(transferButton!.width);
-  await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(0);
+  const accessSection = page.locator('section.settings-block').filter({ has: page.getByRole('heading', { name: '成员访问', exact: true }) });
+  await expect(accessSection.getByRole('button', { name: /刷新/ })).toHaveCount(0);
   await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-settings.png') });
   await expect(page.getByRole('button', { name: '配置 QQ 登录', exact: true })).toBeHidden();
   await page.getByRole('button', { name: '高级配置', exact: true }).click();

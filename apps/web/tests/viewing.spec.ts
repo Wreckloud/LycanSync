@@ -691,6 +691,7 @@ test('聚焦卡片只隐藏重复预览，按可用空间居中且不干扰后�
   await expect.poll(() => strip.evaluate(element => element.scrollWidth - element.clientWidth - element.scrollLeft)).toBeLessThan(2);
   await page.getByRole('button', { name: '观看成员H的共享画面', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(1);
+  await page.locator('.viewing-tile').hover();
   await page.getByRole('button', { name: '退出观看', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(0);
   await expect(page.locator('[data-scroll-key="H"] video')).toHaveCount(1);
@@ -1147,9 +1148,11 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await strip.evaluate(element => { element.scrollLeft = 0; });
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(1);
+  await page.locator('.viewing-tile').hover();
   await page.getByRole('button', { name: '退出观看', exact: true }).click();
   await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await page.locator('.viewing-tile').hover();
   await page.getByRole('button', { name: '收起成员', exact: true }).click();
   await expect(strip).toHaveCount(0);
   await expect(page.locator('.viewing-members-panel')).not.toBeVisible();
@@ -1169,6 +1172,7 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '展开成员', exact: true }).click();
   await expect(strip).toBeVisible();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   const handle = page.getByRole('button', { name: '收起共享画面' });
   await expect(handle).toBeVisible();
@@ -1337,8 +1341,10 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
     await unchanged();
     await expect(stage).toHaveCSS('height', viewingHeight);
   }
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '收起成员', exact: true }).click();
   await unchanged();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   await unchanged();
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();

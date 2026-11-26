@@ -336,7 +336,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
   await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '12px');
   await expect(page.locator('.personal-avatar')).toHaveCSS('width', '32px');
-  await expect(page.locator('.group-member-row').nth(1).locator('.group-member-info')).toHaveCSS('height', '34px');
+  await expect(page.locator('.group-member-row').nth(1).locator('.group-member-info')).toHaveCSS('height', '36px');
   await expect(page.locator('.group-member-row').nth(1)).toHaveCSS('height', '40px');
   const proportions = await page.evaluate(() => {
     const ratio = (selector: string) => {

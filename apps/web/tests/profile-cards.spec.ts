@@ -265,6 +265,9 @@ test('共同连麦读取失败不冒充无记录，重试确认零时长时显�
 });
 
 test('签名读取失败可以在卡片重试，旧请求不能覆盖新成员', async ({ page }) => {
+  const withoutSignature = { ...group, members: members.map(member => member.userId === friendId ? { ...member, signature: undefined } : member) };
+  await page.route('**/api/groups', route => route.fulfill({ json: [withoutSignature] }));
+  await page.route('**/api/groups/' + groupId, route => route.fulfill({ json: withoutSignature }));
   let attempts = 0;
   await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, async route => {
     if (++attempts === 1) return route.fulfill({ status: 503, json: { detail: '签名暂时不可用' } });

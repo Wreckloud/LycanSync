@@ -74,7 +74,7 @@ test('画质滑块支持跨项动画和键盘切换，缩放后仍对齐当前�
   await selected.focus();
   await page.keyboard.press('End');
   await expect(presets.getByRole('tab', { name: '自定义', exact: true })).toBeFocused();
-  await expect(page.locator('.capture-quality-description')).toContainText('适合进阶用户');
+  await expect(page.getByRole('tabpanel', { name: '自定义' })).toContainText('30 FPS，优先保留细节');
 });
 
 test('普通窗口说明可能出现系统边框，一次确认后共享，窄窗口按钮可见', async ({ page }, testInfo) => {
