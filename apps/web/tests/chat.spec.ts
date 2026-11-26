@@ -586,8 +586,14 @@ test('历史图片先加载缩略图，点击原图后保留比例且来回滚�
   await expect(preview).toHaveJSProperty('naturalWidth', 1);
   expect(thumbnailRequests).toBe(1);
   expect(imageRequests).toBe(0);
-  await article.getByRole('button', { name: '加载原图' }).click();
-  await expect.poll(() => imageRequests).toBe(1);
+  await article.getByRole('button', { name: '查看图片' }).click();
+  const hd = page.getByRole('button', { name: /^查看原图/ });
+  await expect(hd).toBeVisible();
+  expect(imageRequests).toBe(0);
+  await hd.click();
+  await expect(page.getByRole('button', { name: '已显示原图' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
+  expect(imageRequests).toBe(1);
   await expect(article.getByRole('button', { name: '查看图片' })).toBeVisible();
   await expect(article.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const imageBounds = await frame.boundingBox();

@@ -110,8 +110,7 @@ button.chat-file-summary { cursor: pointer; }
 .chat-file-details strong, .composer-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-file-details strong { flex-basis: 100%; max-width: 100%; font-size: 13px; }
 .chat-file-details small, .composer-attachment small { color: var(--subtle); font-size: 11px; }
-.chat-file-card > progress, .chat-media-progress { height: 5px; accent-color: var(--accent); }
-.chat-file-card > progress { position: absolute; left: 10px; bottom: 2px; width: calc(100% - 20px); }
+.chat-file-card > .app-progress { position: absolute; left: 10px; bottom: 2px; width: calc(100% - 20px); }
 .chat-file-card > button:not(.chat-file-summary), .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
 .chat-file-card > button:not(.chat-file-summary):hover, .composer-attachment > button:not(.composer-attachment-preview):enabled:hover { background: var(--panel); color: var(--text); }
 .chat-file-error { color: var(--danger) !important; }

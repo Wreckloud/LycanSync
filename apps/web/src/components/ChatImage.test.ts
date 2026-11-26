@@ -4,7 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
-import { chatMediaFrameStyle } from '../chat/chatMedia';
+import { chatMediaFrameStyle, CHAT_IMAGE_CACHE_LIMIT } from '../chat/chatMedia';
 import type { AccountCache } from '../cache/localCache';
 import { ApiRequestError } from '../auth/authApi';
 
@@ -42,7 +42,7 @@ function setup(cache: AccountCache | null = null, byteSize = 20) {
   const emit = vi.fn();
   const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, thumbnail, error, originalAction, observeFrame, load, imageFailed, openImage })`, {
     computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
-    chatMediaFrameStyle, inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob, ApiRequestError,
+    chatMediaFrameStyle, CHAT_IMAGE_CACHE_LIMIT, inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob, ApiRequestError,
     fetchAttachment, fetchChatThumbnail, fetchFilePreview: fetchAttachment, AbortController, Error, IntersectionObserver: FakeObserver,
     URL: { createObjectURL, revokeObjectURL },
   })) as { frame: { value: HTMLElement | null }; source: { value: string }; error: { value: string };
@@ -63,13 +63,16 @@ it('可见时仅加载缩略图，手动加载完成后替换并复用原图', a
     expect(f.fetchAttachment).not.toHaveBeenCalled();
     expect(f.image.thumbnail.value).toBe(true);
     f.image.openImage();
+    expect(f.emit).toHaveBeenCalledWith('preview', expect.any(Blob), true);
+    expect(f.fetchAttachment).not.toHaveBeenCalled();
+    void f.image.load();
     expect(f.image.thumbnail.value).toBe(true);
     f.pending[0].resolve(original);
     await settleRequests();
     expect(f.image.thumbnail.value).toBe(false);
     expect(f.revokeObjectURL).toHaveBeenCalledWith('blob:preview-0');
     f.image.openImage();
-    expect(f.emit).toHaveBeenCalledExactlyOnceWith('preview', original);
+    expect(f.emit).toHaveBeenLastCalledWith('preview', original, false);
     expect(f.fetchAttachment).toHaveBeenCalledOnce();
   } finally { f.scope.stop(); }
 });

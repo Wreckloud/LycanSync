@@ -4,14 +4,14 @@ import { Download, Music2, X } from '@lucide/vue';
 import { desktopMediaUrl, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
-import { chatMediaFormat } from '../chat/chatMedia';
+import { chatMediaFormat, formatAttachmentSize, CHAT_IMAGE_CACHE_LIMIT } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 import MediaVideoSurface from './MediaVideoSurface.vue';
 import ChatImageSurface from './ChatImageSurface.vue';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob; localSource?: string; inlineLoading?: boolean }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob; thumbnail?: boolean; localSource?: string; inlineLoading?: boolean }>();
 const emit = defineEmits<{ close: []; progress: [percent: number]; ready: [] }>();
 const format = computed(() => chatMediaFormat(props.attachment));
 const title = computed(() => props.attachment.fileName || '图片');
@@ -36,8 +36,61 @@ let request: AbortController | undefined;
 let conversionRequest: AbortController | undefined;
 let originalVideoCache: { revision: number; pending?: Blob } | undefined;
 let disposed = false;
+const original = ref<{ url: string; width: number; height: number }>();
+const originalPercent = ref<number>();
+const originalError = ref('');
+let originalTask: Promise<void> | undefined;
+let originalRequest: AbortController | undefined;
+
+async function readOriginal(signal: AbortSignal, cachedOnly: boolean) {
+  const attachment = props.attachment;
+  const key = props.imageMessage ? attachment.id : 'file:' + attachment.id;
+  const revision = cache?.revision;
+  let url = '';
+  let cached: Blob | null = null;
+  try {
+    cached = await cache?.read<Blob>('image', props.groupId, key) ?? null;
+    if (signal.aborted || (!cached && cachedOnly)) return;
+    const progress = (bytes: number) => {
+      if (!signal.aborted && attachment.byteSize > 0) originalPercent.value = Math.min(99, Math.floor(bytes * 100 / attachment.byteSize));
+    };
+    const blob = cached ?? await (props.imageMessage ? fetchAttachment : fetchFilePreview)(props.groupId, attachment.id, signal, progress);
+    if (signal.aborted) return;
+    url = URL.createObjectURL(blob.slice(0, blob.size, format.value?.contentType || blob.type));
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (signal.aborted) return;
+    original.value = { url, width: image.naturalWidth, height: image.naturalHeight };
+    url = '';
+    if (!cached && blob.size <= CHAT_IMAGE_CACHE_LIMIT && cache?.revision === revision) void cache?.write('image', props.groupId, blob, key);
+  } catch {
+    if (signal.aborted) return;
+    if (cached) await cache?.discard('image', props.groupId, key);
+    if (!cachedOnly) originalError.value = '原图加载失败，点击 HD 重试';
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+}
+
+function loadOriginal(cachedOnly = false) {
+  if (disposed || original.value) return;
+  if (!cachedOnly && originalTask) return originalTask;
+  originalRequest?.abort();
+  const controller = originalRequest = new AbortController();
+  originalError.value = '';
+  if (!cachedOnly) originalPercent.value = 0;
+  const task = readOriginal(controller.signal, cachedOnly).finally(() => {
+    if (originalRequest === controller) { originalPercent.value = undefined; originalTask = undefined; }
+  });
+  if (!cachedOnly) originalTask = task;
+  return task;
+}
 
 function release() {
+  originalRequest?.abort();
+  if (original.value) URL.revokeObjectURL(original.value.url);
+  original.value = undefined;
   originalVideoCache = undefined;
   player.value?.pause();
   player.value?.removeAttribute('src');
@@ -86,7 +139,8 @@ async function load(refresh = false) {
     if (smallVideo && revision !== undefined && cache.revision === revision && (cached || blob.size === props.attachment.byteSize)) {
       originalVideoCache = { revision, pending: cached ? undefined : blob };
     }
-    source.value = URL.createObjectURL(blob.slice(0, blob.size, format.value?.contentType || blob.type));
+    source.value = URL.createObjectURL(blob.slice(0, blob.size, props.thumbnail ? blob.type : format.value?.contentType || blob.type));
+    if (props.thumbnail) void loadOriginal(true);
   } catch (reason) {
     if (!current.signal.aborted && !disposed) {
       error.value = reason instanceof Error ? reason.message : '无法加载文件，请重试。';
@@ -144,12 +198,18 @@ async function convertVideo() {
   }
 }
 
+let savingImage = false;
 async function download() {
   if (downloading.value) return;
   if (props.imageMessage) {
-    if (!source.value) return;
+    if (!source.value || savingImage) return;
+    if (props.thumbnail) {
+      savingImage = true;
+      try { await loadOriginal(); } finally { savingImage = false; }
+      if (!original.value || disposed) return;
+    }
     const link = document.createElement('a');
-    link.href = source.value;
+    link.href = original.value?.url ?? source.value;
     link.download = props.attachment.fileName || `图片.${props.attachment.contentType === 'image/png' ? 'png' : 'jpg'}`;
     link.click();
     return;
@@ -192,7 +252,9 @@ onScopeDispose(() => {
         <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭查看器" @click="close"><X :size="18" /></button>
       </header>
       <div class="chat-media-stage" :aria-busy="loading">
-        <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource" @close="close" @download="download" @error="playbackFailed" />
+        <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource"
+          :original-label="thumbnail ? '查看原图 · ' + formatAttachmentSize(attachment.byteSize) : undefined" :original="original"
+          :percent="originalPercent" :original-error="originalError" @original-request="loadOriginal()" @close="close" @download="download" @error="playbackFailed" />
         <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading"
           :buffer-for-preview="inlineLoading" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="videoPlayable" @close="close" @download="download" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">

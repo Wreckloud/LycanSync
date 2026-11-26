@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { chatMediaFrameStyle } from '../chat/chatMedia';
+import { chatMediaFrameStyle, CHAT_IMAGE_CACHE_LIMIT } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { Download } from '@lucide/vue';
 import ChatMediaProgress from './ChatMediaProgress.vue';
@@ -8,7 +8,7 @@ import { fetchAttachment, fetchChatThumbnail, fetchFilePreview } from '../chat/c
 import { ApiRequestError } from '../auth/authApi';
 
 const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; byteSize: number; alt: string; fileContentType?: string }>();
-const emit = defineEmits<{ preview: [blob: Blob]; unpreviewable: [] }>();
+const emit = defineEmits<{ preview: [blob: Blob, thumbnail?: boolean]; unpreviewable: [] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
@@ -26,8 +26,7 @@ let prefetchVisible = false;
 let nearby = true;
 let disposed = false;
 let cachedSource = false;
-const originalCacheLimit = 32 * 1024 * 1024;
-const originalAction = computed(() => props.byteSize > originalCacheLimit ? '临时查看原图' : '加载原图');
+const originalAction = computed(() => props.byteSize > CHAT_IMAGE_CACHE_LIMIT ? '临时查看原图' : '加载原图');
 let previewState: 'ready' | 'retryOnEntry' | 'unavailable' = 'ready';
 let transientFailures = 0;
 let openedOriginal = false;
@@ -72,7 +71,7 @@ async function load(skipCache = false, previewOnly = false) {
       blob = fileType ? await fetchFilePreview(groupId, attachmentId, currentController.signal, progress)
         : await fetchAttachment(groupId, attachmentId, currentController.signal, progress);
       if (fileType) blob = blob.slice(0, blob.size, fileType);
-      if (current() && blob.size <= originalCacheLimit && cache?.revision === cacheRevision) {
+      if (current() && blob.size <= CHAT_IMAGE_CACHE_LIMIT && cache?.revision === cacheRevision) {
         void cache?.write('image', groupId, blob, originalKey);
       }
     }
@@ -83,7 +82,7 @@ async function load(skipCache = false, previewOnly = false) {
     cachedSource = cached instanceof Blob;
     thumbnail.value = isThumbnail;
     activeUrl = URL.createObjectURL(blob);
-    if (!isThumbnail) activeBlob = blob;
+    activeBlob = blob;
     source.value = activeUrl;
   } catch (reason) {
     if (!current()) return;
@@ -100,7 +99,7 @@ async function load(skipCache = false, previewOnly = false) {
 }
 
 function openImage() {
-  if (activeBlob) emit('preview', activeBlob);
+  if (activeBlob) emit('preview', activeBlob, thumbnail.value);
   else void load();
 }
 
@@ -184,11 +183,11 @@ onScopeDispose(() => {
 <template>
   <div ref="frame" class="chat-image-frame" :style="frameStyle">
     <span v-if="!source" class="chat-media-placeholder" aria-hidden="true" />
-    <button type="button" class="chat-image-open" :aria-label="source && !thumbnail ? '查看图片' : originalAction"
+    <button type="button" class="chat-image-open" :aria-label="source ? '查看图片' : originalAction"
       :disabled="loaded !== null || !!error" @click="openImage">
       <img v-if="source" :key="source" class="chat-image" :src="source" :alt="alt" @error="imageFailed(($event.currentTarget as HTMLImageElement).src)" />
-      <span v-if="(!source || thumbnail) && loaded === null && !error" class="chat-media-play chat-image-download"
-        :class="{ 'chat-image-temporary': byteSize > originalCacheLimit }"><template v-if="byteSize > originalCacheLimit">{{ originalAction }}</template><Download v-else :size="20" /></span>
+      <span v-if="!source && loaded === null && !error" class="chat-media-play chat-image-download"
+        :class="{ 'chat-image-temporary': byteSize > CHAT_IMAGE_CACHE_LIMIT }"><template v-if="byteSize > CHAT_IMAGE_CACHE_LIMIT">{{ originalAction }}</template><Download v-else :size="20" /></span>
     </button>
     <ChatMediaProgress v-if="loaded !== null" :percent="byteSize ? Math.min(99, Math.floor(100 * loaded / byteSize)) : undefined" label="原图加载进度"><Download :size="20" /></ChatMediaProgress>
     <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppProgress from './AppProgress.vue';
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
 import RecordingThumbnail from './settings/RecordingThumbnail.vue';
 import ChatMediaProgress from './ChatMediaProgress.vue';
@@ -11,7 +12,7 @@ import ChatFileCard from './ChatFileCard.vue';
 import ChatImage from './ChatImage.vue';
 
 const props = defineProps<{ groupId: string; attachment: ChatAttachment; pending?: boolean; localPreview?: string; videoLoading?: boolean; videoPercent?: number }>();
-const emit = defineEmits<{ preview: [blob?: Blob] }>();
+const emit = defineEmits<{ preview: [blob?: Blob, thumbnail?: boolean] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const format = computed(() => chatMediaFormat(props.attachment));
 const canLoadCover = computed(() => format.value?.kind === 'video'
@@ -152,10 +153,10 @@ onScopeDispose(() => {
     <ChatImage v-else-if="format?.kind === 'image' && coverState !== 'unavailable'" :group-id="groupId" :attachment-id="attachment.id"
       :width="attachment.width ?? 420" :height="attachment.height ?? 236.25" :byte-size="attachment.byteSize"
       :alt="attachment.fileName || '图片'" :file-content-type="format.contentType"
-      @preview="emit('preview', $event)" @unpreviewable="coverState = 'unavailable'" />
+      @preview="(blob, thumbnail) => emit('preview', blob, thumbnail)" @unpreviewable="coverState = 'unavailable'" />
     <ChatFileCard v-else-if="!format || format.kind === 'audio' || coverState !== 'ready'"
       :group-id="groupId" :attachment="attachment" :preview-disabled="coverState === 'unavailable' && format?.kind === 'image'" @preview="emit('preview')">
-      <progress v-if="videoLoading" max="100" :value="videoPercent" aria-label="视频加载进度" />
+      <AppProgress v-if="videoLoading" :percent="videoPercent" label="视频加载进度" />
     </ChatFileCard>
     <div v-else class="chat-inline-media" :style="frameStyle">
       <button class="chat-inline-image" type="button" :aria-label="videoLoading ? '取消加载视频' : '播放视频'" @click="emit('preview')">

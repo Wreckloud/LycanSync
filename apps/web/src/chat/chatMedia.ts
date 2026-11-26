@@ -1,5 +1,7 @@
 import type { ChatAttachment } from './chatApi';
 
+export const CHAT_IMAGE_CACHE_LIMIT = 32 * 1024 * 1024;
+
 export function formatAttachmentSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   const unit = bytes < 1024 ** 2 ? 'KiB' : 'MiB';

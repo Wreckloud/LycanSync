@@ -37,15 +37,17 @@ const pendingPreview = ref<PendingAttachment | null>(null);
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
 const viewedMediaBlob = ref<Blob>();
+const previewIsThumbnail = ref(false);
 const videoPercent = ref<number | null>(null);
 function closeMedia() {
   viewedMedia.value = null;
   viewedMediaBlob.value = undefined;
   videoPercent.value = null;
 }
-function previewMedia(message: ChatMessage, blob?: Blob) {
+function previewMedia(message: ChatMessage, blob?: Blob, thumbnail = false) {
   if (videoPercent.value !== null && viewedMedia.value?.id === message.id) { closeMedia(); return; }
   viewedMediaBlob.value = blob;
+  previewIsThumbnail.value = thumbnail;
   viewedMedia.value = message;
   videoPercent.value = message.attachment && chatMediaFormat(message.attachment)?.kind === 'video' ? 0 : null;
 }
@@ -481,9 +483,9 @@ onScopeDispose(() => {
                 <ChatTransferStatus v-if="transfers.outgoing.has(message.id) || message.attachment?.transferStatus"
                   :group-id="group.id" :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
                 <ChatImage v-else-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-                  :width="message.attachment.width ?? 420" :height="message.attachment.height ?? 236" :byte-size="message.attachment.byteSize" :alt="`${senderName(message)} 发送的图片`" @preview="blob => previewMedia(message, blob)" />
+                  :width="message.attachment.width ?? 420" :height="message.attachment.height ?? 236" :byte-size="message.attachment.byteSize" :alt="`${senderName(message)} 发送的图片`" @preview="(blob, thumbnail) => previewMedia(message, blob, thumbnail)" />
                 <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment"
-                  :video-loading="viewedMedia?.id === message.id && videoPercent !== null" :video-percent="videoPercent ?? undefined" @preview="blob => previewMedia(message, blob)" />
+                  :video-loading="viewedMedia?.id === message.id && videoPercent !== null" :video-percent="videoPercent ?? undefined" @preview="(blob, thumbnail) => previewMedia(message, blob, thumbnail)" />
               </div>
             </div>
           </article>
@@ -548,7 +550,7 @@ onScopeDispose(() => {
     </DialogTransition>
     <DialogTransition :defer-open="videoPercent !== null">
       <ChatMediaViewer v-if="viewedMedia?.attachment" :key="viewedMedia.id" :group-id="group.id" :attachment="viewedMedia.attachment"
-        :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" :inline-loading="videoPercent !== null"
+        :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" :thumbnail="previewIsThumbnail" :inline-loading="videoPercent !== null"
         @progress="percent => { if (videoPercent !== null) videoPercent = percent; }" @ready="videoPercent = null" @close="closeMedia" />
     </DialogTransition>
   </section>

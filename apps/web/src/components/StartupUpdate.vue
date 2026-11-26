@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppProgress from './AppProgress.vue';
 import { computed, onMounted, ref } from 'vue';
 import { LoaderCircle } from '@lucide/vue';
 const props = defineProps<{ state: StartupUpdateState | null; modal?: boolean }>();
@@ -24,7 +25,7 @@ onMounted(() => { if (props.modal) panel.value?.focus(); });
         <div class="startup-update-progress-label">
           <span>版本 {{ state.nextVersion }}</span><span>{{ state.percent ?? 0 }}%</span>
         </div>
-        <progress :value="state.percent ?? 0" max="100" aria-label="更新下载进度" />
+        <AppProgress :percent="state.percent ?? 0" label="更新下载进度" />
       </template>
       <LoaderCircle v-else-if="state?.phase !== 'ready'" class="startup-update-spinner" :size="18" aria-hidden="true" />
       <div class="startup-update-actions card-actions card-actions-no-primary">
@@ -41,7 +42,7 @@ onMounted(() => { if (props.modal) panel.value?.focus(); });
 .startup-update-card h1 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
 .startup-update-card p { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
 .startup-update-progress-label { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; color: var(--muted); }
-.startup-update-card progress { width: 100%; height: 8px; margin-top: 8px; accent-color: var(--accent); }
+.startup-update-card .app-progress { margin-top: 8px; }
 .startup-update-actions { min-height: calc(var(--button-height) + 16px); margin-top: 20px; }
 .startup-update-actions > button { grid-row: 1; }
 .startup-update-spinner { color: var(--muted); animation: app-loading-spin 1s linear infinite; }

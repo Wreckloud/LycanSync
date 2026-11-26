@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppProgress from './AppProgress.vue';
 import { computed, inject } from 'vue';
 import { Download, X } from '@lucide/vue';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
@@ -34,6 +35,6 @@ function cancel() { task.value?.controller?.abort(); }
     <button v-else-if="downloading" type="button" aria-label="取消文件下载" @click="cancel"><X :size="15" /></button>
     <button v-else type="button" :aria-label="error ? '重试文件下载' : '下载文件'" @click="download"><Download :size="15" /></button>
     <slot />
-    <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
+    <AppProgress v-if="downloading" :percent="progress()" label="文件下载进度" />
   </div>
 </template>

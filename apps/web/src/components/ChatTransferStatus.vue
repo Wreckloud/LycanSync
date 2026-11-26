@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppProgress from './AppProgress.vue';
 import { computed } from 'vue';
 import { RotateCcw, X } from '@lucide/vue';
 import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
@@ -41,8 +42,8 @@ const statusText = computed(() => {
       </template>
       <button v-else-if="job?.item?.kind === 'FILE'" type="button" aria-label="取消上传" title="取消上传" @click="job.controller.abort()"><X :size="15" /></button>
     </template>
-    <progress v-if="job ? job.state !== 'failed' : message.attachment.transferStatus !== 'FAILED'"
-      :value="percent" max="100" :aria-label="uploaded ? statusText : '文件上传进度'" />
+    <AppProgress v-if="job ? job.state !== 'failed' : message.attachment.transferStatus !== 'FAILED'"
+      :percent="percent" :label="uploaded ? statusText : '文件上传进度'" />
   </ChatFileCard>
   <template v-else-if="visual && message.attachment">
     <ChatFileMedia class="chat-transfer-media" :group-id="groupId" :attachment="message.attachment" pending :local-preview="job?.item?.previewUrl">
