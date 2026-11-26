@@ -24,7 +24,10 @@ async function refresh() {
     const result: Entry[] = await response.json();
     if (!current.signal.aborted) entries.value = result;
   } catch (reason) {
-    if (!current.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取日志列表。';
+    if (!current.signal.aborted) {
+      if (entries.value?.length === 0) entries.value = null;
+      error.value = reason instanceof Error ? reason.message : '无法读取日志列表。';
+    }
   } finally { if (request === current) loading.value = false; }
 }
 
