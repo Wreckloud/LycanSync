@@ -68,12 +68,17 @@ describe('audioPreferences', () => {
     expect(loadAudioPreferences('local-user', storage)).toMatchObject({ outputVolume: 1.5, screenShareVolume: 1 });
   });
 
+  it.each([0, 0.25, 0.6])('保留升级前已经保存的共享音量 %s', (screenShareVolume) => {
+    expect(loadAudioPreferences('old-user', { getItem: () => JSON.stringify({ screenShareVolume }) }).screenShareVolume)
+      .toBe(screenShareVolume);
+  });
+
   it('保留旧版偏好并为缺少的处理开关补充默认值', () => {
     const storage = { getItem: () => JSON.stringify({ inputGain: 0.8, outputVolume: 1.2 }) };
     expect(loadAudioPreferences('local-user', storage)).toMatchObject({
       inputGain: 0.8,
       outputVolume: 1.2,
-      screenShareVolume: 0.25,
+      screenShareVolume: 0.35,
       voiceVolumeBalance: true,
       echoCancellation: true,
       noiseSuppression: true,

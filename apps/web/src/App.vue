@@ -42,7 +42,8 @@ import type { ScreenShareQualityId } from './rtc/screenShareQuality';
 import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
-import { AUDIO_VOLUME_MAX, SHARE_VOLUME_MAX } from './rtc/audioPreferences';
+import { AUDIO_VOLUME_MAX, BACKGROUND_SHARE_GAIN, SHARE_VOLUME_MAX } from './rtc/audioPreferences';
+import { setRemotePlaybackVolume } from './rtc/remotePlaybackVolume';
 import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPreferences';
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
@@ -833,7 +834,7 @@ const remoteAudioTracks = computed(() => rtc.participants
     item.track instanceof RemoteAudioTrack));
 // 先直接静音现有播放轨道，不能等 Vue 更新音频组件后才停止本机收听。
 watch([listening, remoteAudioTracks], ([enabled, tracks]) => {
-  if (!enabled) tracks.forEach((item) => item.track.setVolume(0));
+  if (!enabled) tracks.forEach((item) => setRemotePlaybackVolume(item.track, 0));
 }, { flush: 'sync' });
 async function joinGroup(groupId: string) {
   selectCaptureSource(null);
@@ -1040,7 +1041,8 @@ function shareVolume(identity: string) {
 function remoteScreenSharePlaybackVolume(identity: string) {
   const focused = viewingWindows.value?.audioFocusIdentity;
   if (focused && focused !== identity) return 0;
-  return Math.min(SHARE_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
+  const volume = Math.min(SHARE_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
+  return focused ? volume : volume * BACKGROUND_SHARE_GAIN;
 }
 function updateSharedVolume(identity: string, value: number) {
   if (value > 0) shareLevels.set(identity, value);
@@ -1055,7 +1057,7 @@ function toggleSharedAudio(identity: string) {
   mutedShares.value = mutedShares.value.includes(identity)
     ? mutedShares.value.filter((current) => current !== identity) : [...mutedShares.value, identity];
   remoteAudioTracks.value.filter((item) => item.participantIdentity === identity && item.source === Track.Source.ScreenShareAudio)
-    .forEach((item) => item.track.setVolume(listening.value && audioOutput.available.value ? remoteScreenSharePlaybackVolume(identity) : 0));
+    .forEach((item) => setRemotePlaybackVolume(item.track, listening.value && audioOutput.available.value ? remoteScreenSharePlaybackVolume(identity) : 0));
 }
 
 function previewGroup(groupId: string) {
@@ -1374,6 +1376,7 @@ function participantListening(participant: Participant) {
       </template>
     </ScreenShareWindows>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
+      :shared-audio="item.source === Track.Source.ScreenShareAudio"
       :output="audioOutput"
       :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"
       @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"

@@ -87,6 +87,7 @@ createApp({ setup() {
     expect(await sharedVolumeToggle.evaluate(el => Boolean(el.previousElementSibling?.contains(document.getElementById('settings-share-volume'))))).toBe(true);
     await expect(sharedVolumeToggle).toHaveAttribute('aria-expanded', 'true');
     await sharedVolume.fill('0.4');
+    await expect(page.getByText(/聊天和网格中降至约 11%/)).toBeVisible();
     await sharedVolumeToggle.click();
     await expect(sharedVolume).toBeHidden();
     await expect(sharedVolumeToggle).toContainText('40%');

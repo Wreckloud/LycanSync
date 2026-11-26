@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import type { RemoteAudioTrack } from 'livekit-client';
 import { RemoteVoiceBalance } from '../rtc/remoteVoiceBalance';
+import { prepareSharePlayback, setRemotePlaybackVolume } from '../rtc/remotePlaybackVolume';
 import type { AudioOutputRouting } from '../rtc/useAudioOutput';
 
 const props = defineProps<{
@@ -9,6 +10,7 @@ const props = defineProps<{
   volume: number;
   context: AudioContext | null;
   balance: boolean;
+  sharedAudio?: boolean;
   output?: AudioOutputRouting;
 }>();
 const emit = defineEmits<{ balanceError: []; playbackError: [] }>();
@@ -20,14 +22,16 @@ watch([audioElement, () => props.track, () => props.context, () => props.output?
     if (!element || !available) return;
     let cancelled = false;
     let attached = false;
+    let releaseSharePlayback: (() => void) | undefined;
     const binding = props.output?.bindElement(element);
     function attach() {
       if (cancelled) return;
+      if (context && props.sharedAudio) releaseSharePlayback = prepareSharePlayback(track, context, props.volume);
       track.attach(element!);
       attached = true;
       // 音量可能在元素挂载前已设为零；挂载后再应用一次，避免 SDK 的零值缓存被跳过。
-      track.setVolume(props.volume);
-      if (context) {
+      if (!releaseSharePlayback) track.setVolume(props.volume);
+      if (context && !props.sharedAudio) {
         voiceBalance = new RemoteVoiceBalance(context, track, () => props.volume, () => emit('balanceError'));
         void voiceBalance.setEnabled(props.balance);
       }
@@ -43,6 +47,7 @@ watch([audioElement, () => props.track, () => props.context, () => props.output?
       cancelled = true;
       binding?.release();
       if (attached) track.detach(element);
+      releaseSharePlayback?.();
       voiceBalance?.dispose();
       voiceBalance = undefined;
     });
@@ -51,7 +56,7 @@ watch([audioElement, () => props.track, () => props.context, () => props.output?
 watch(() => props.balance, (enabled) => { void voiceBalance?.setEnabled(enabled); });
 watch(() => [props.track, props.volume] as const, ([track, volume]) => {
   voiceBalance?.setAudible(volume > 0);
-  track.setVolume(volume);
+  setRemotePlaybackVolume(track, volume);
 }, { immediate: true, flush: 'sync' });
 </script>
 

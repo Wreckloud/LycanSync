@@ -3,6 +3,8 @@ import { runInNewContext } from 'node:vm';
 import { transpileModule } from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { Track } from 'livekit-client';
+import { BACKGROUND_SHARE_GAIN } from './rtc/audioPreferences';
+import { setRemotePlaybackVolume } from './rtc/remotePlaybackVolume';
 
 const source = readFileSync(new URL('./App.vue', import.meta.url), 'utf8');
 const volumeStart = source.indexOf('function shareVolume(');
@@ -14,7 +16,7 @@ const script = transpileModule(source.slice(volumeStart, volumeEnd) + source.sli
 it('逐路共享声音开关立即作用于该声音轨，不修改人声、其他共享或总音量；停止收听不被绕过', () => {
   const microphone = { setVolume: vi.fn() }, screen = { setVolume: vi.fn() }, other = { setVolume: vi.fn() };
   const context = {
-    Track, SHARE_VOLUME_MAX: 1, viewingWindows: { value: null }, mutedShares: { value: [] as string[] }, listening: { value: true },
+    Track, BACKGROUND_SHARE_GAIN, setRemotePlaybackVolume, SHARE_VOLUME_MAX: 1, viewingWindows: { value: null }, mutedShares: { value: [] as string[] }, listening: { value: true },
     shareLevels: new Map([['A', 0.5]]), audioOutput: { available: { value: true } },
     screenShareVolume: { value: 0.2 }, outputVolume: { value: 0.8 },
     remoteAudioTracks: { value: [
@@ -29,7 +31,7 @@ it('逐路共享声音开关立即作用于该声音轨，不修改人声、其�
   expect(screen.setVolume).toHaveBeenLastCalledWith(0);
   expect([...context.mutedShares.value]).toEqual(['A']);
   context.toggleSharedAudio('A');
-  expect(screen.setVolume.mock.lastCall![0]).toBeCloseTo(0.08);
+  expect(screen.setVolume.mock.lastCall![0]).toBeCloseTo(0.08 * BACKGROUND_SHARE_GAIN);
   context.listening.value = false;
   context.toggleSharedAudio('A'); context.toggleSharedAudio('A');
   expect(screen.setVolume).toHaveBeenLastCalledWith(0);

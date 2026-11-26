@@ -297,36 +297,36 @@ test('成员卡片保留底部麦克风，闭麦时禁用并在画面右下角�
   expect(await reopened.boundingBox()).toEqual(position);
 });
 
-test('聚焦只播放选中的共享声音，切回网格或成员卡片恢复各自音量', async ({ page }) => {
+test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选画面的正常音量', async ({ page }) => {
   await sharing(page, ['A', 'B', 'C']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { addShareAudio(ids: string[]): void } }).__viewingTest.addShareAudio(['A', 'B', 'C']));
   const volumes = () => page.evaluate(() =>
     (window as unknown as { __viewingTest: { shareVolumes(): Record<string, number> } }).__viewingTest.shareVolumes());
   const sound = (name: string) => page.getByTestId('participant-card').filter({ hasText: name }).getByRole('button', { name: '静音这路共享声音' });
-  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.25, C: 0.25 });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: 0.1, C: 0.1 });
   await sound('成员B').press('ArrowUp');
-  await expect.poll(volumes).toMatchObject({ B: 0.25 });
+  await expect.poll(volumes).toMatchObject({ B: 0.1 });
   await sound('成员B').press('ArrowDown');
   await sound('成员C').click();
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
-  await expect.poll(volumes).toEqual({ A: 0.25, B: 0, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0.35, B: 0, C: 0 });
   await page.locator('.viewing-surface').first().hover();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
-  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
-  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0, B: expect.closeTo(0.3325, 6), C: 0 });
   const popup = page.waitForEvent('popup');
   await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
   const viewer = await popup;
   await viewer.locator('.viewing-surface').hover();
-  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0, B: expect.closeTo(0.3325, 6), C: 0 });
   await viewer.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
-  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
   await viewer.close();
-  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0, B: expect.closeTo(0.3325, 6), C: 0 });
   await page.getByRole('button', { name: '收起共享画面', exact: true }).click();
-  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
 });
 
 test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复低层', async ({ page }) => {

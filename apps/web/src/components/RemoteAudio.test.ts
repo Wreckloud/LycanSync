@@ -4,11 +4,37 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
+import { prepareSharePlayback, setRemotePlaybackVolume } from '../rtc/remotePlaybackVolume';
 
 const script = parse(readFileSync(new URL('./RemoteAudio.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('RemoteAudio.ts', script, ts.ScriptTarget.Latest, true);
 const compiled = ts.transpile(sourceFile.statements.filter((statement) => !ts.isImportDeclaration(statement))
   .map((statement) => statement.getText(sourceFile)).join('\n'), { target: ts.ScriptTarget.ES2022 });
+
+it('共享音轨接入前已经静音，布局变化只调当前节点，重连继承当前音量', async () => {
+  const param = { value: 1, setTargetAtTime: vi.fn() };
+  const gain = { gain: param, context: { currentTime: 2 }, disconnect: vi.fn() };
+  const createGain = vi.fn(() => gain);
+  const attachLevels: number[] = [];
+  const track = { attach: () => attachLevels.push(param.value), detach: vi.fn(), setWebAudioPlugins: vi.fn(), setVolume: vi.fn() };
+  const props = reactive({ track, context: { createGain }, volume: 0, balance: false, sharedAudio: true });
+  const scope = effectScope();
+  try {
+    const element = scope.run(() => runInNewContext(`${compiled}\naudioElement`, {
+      ref, watch, prepareSharePlayback, setRemotePlaybackVolume, defineProps: () => props, defineEmits: () => vi.fn(),
+    })) as { value: unknown };
+    element.value = {}; await nextTick();
+    expect(attachLevels).toEqual([0]);
+    props.volume = 0.35;
+    expect(param.setTargetAtTime).toHaveBeenLastCalledWith(0.35, 2, 0.1);
+    expect(createGain).toHaveBeenCalledTimes(1);
+    element.value = null; await nextTick();
+    expect(track.setWebAudioPlugins).toHaveBeenLastCalledWith([]);
+    expect(gain.disconnect).toHaveBeenCalledOnce();
+    element.value = {}; await nextTick();
+    expect(attachLevels).toEqual([0, 0.35]);
+  } finally { scope.stop(); }
+});
 
 it('播放组件保持单次挂载，静音同步生效且先分离音轨再释放插件', async () => {
   const order: string[] = [];
@@ -19,7 +45,7 @@ it('播放组件保持单次挂载，静音同步生效且先分离音轨再释�
   const dispose = vi.fn(() => order.push('dispose'));
   const scope = effectScope();
   const { audioElement } = scope.run(() => runInNewContext(`${compiled}\n({ audioElement })`, {
-    ref, watch, defineProps: () => props, defineEmits: () => vi.fn(),
+    ref, watch, prepareSharePlayback, setRemotePlaybackVolume, defineProps: () => props, defineEmits: () => vi.fn(),
     RemoteVoiceBalance: class { setEnabled = enabled; setAudible = audible; dispose = dispose; },
   })) as { audioElement: { value: unknown } };
   audioElement.value = {};
@@ -47,7 +73,7 @@ it('输出未准备好不挂载声音，切换后可恢复；销毁不挂载迟�
   const props = { track, context: null, volume: 1, balance: false, output };
   const scope = effectScope();
   const { audioElement } = scope.run(() => runInNewContext(`${compiled}\n({ audioElement })`, {
-    ref, watch, defineProps: () => props, defineEmits: () => vi.fn(),
+    ref, watch, prepareSharePlayback, setRemotePlaybackVolume, defineProps: () => props, defineEmits: () => vi.fn(),
   })) as { audioElement: { value: unknown } };
   audioElement.value = {};
   await nextTick();

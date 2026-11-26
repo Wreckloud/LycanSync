@@ -18,6 +18,8 @@ export interface AudioPreferences extends AudioProcessingSettings {
 
 export const AUDIO_VOLUME_MAX = 2;
 export const SHARE_VOLUME_MAX = 1;
+const DEFAULT_FOCUSED_SHARE_VOLUME = 0.35;
+export const BACKGROUND_SHARE_GAIN = 0.10 / DEFAULT_FOCUSED_SHARE_VOLUME;
 export const AUDIO_VOLUME_STEP = 0.05;
 const AUDIO_VOLUME_SCALE = 1 / AUDIO_VOLUME_STEP;
 
@@ -26,7 +28,7 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   outputDeviceId: 'default',
   inputGain: 1,
   outputVolume: 1,
-  screenShareVolume: 0.25,
+  screenShareVolume: DEFAULT_FOCUSED_SHARE_VOLUME,
   voiceVolumeBalance: true,
   echoCancellation: true,
   noiseSuppression: true,
