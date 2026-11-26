@@ -38,7 +38,7 @@ interface RtcRoomEvents {
   participantEntranceSound?(identity: string, bytes: Uint8Array): void;
   screenShareStarted?(): void;
   screenShareStopped?(): void;
-  disconnected?(): void;
+  disconnected?(reason?: DisconnectReason): void;
   selectNativeScreenSource?(
     capabilities: Promise<Record<string, { available: boolean; reason: string }>>,
   ): Promise<NativeScreenSourceSelection | null>;
@@ -612,7 +612,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       });
       currentRoom.on(RoomEvent.Disconnected, (reason) => {
         if (activeRoom.value !== currentRoom) return;
-        options?.events?.disconnected?.();
+        options?.events?.disconnected?.(reason);
         leave();
         if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
           notice.value = '语音已在另一台设备连接。';

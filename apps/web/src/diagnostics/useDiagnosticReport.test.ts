@@ -1,5 +1,5 @@
 import { effectScope, shallowRef } from 'vue';
-import type { Room } from 'livekit-client';
+import { DisconnectReason, type Room } from 'livekit-client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import { diagnosticReportSample, useDiagnosticReport } from './useDiagnosticReport';
@@ -55,6 +55,26 @@ beforeEach(() => {
   yieldSerialization.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it('房间清理后仍能导出 SDK 断开原因，关闭记录和新报告隔离', async () => {
+  const { room, report, exportDiagnosticReport } = setup();
+  report.start();
+  await vi.advanceTimersByTimeAsync(2_000);
+  report.recordRoomDisconnect(DisconnectReason.SIGNAL_CLOSE);
+  const time = new Date().toISOString();
+  room.value = null;
+  report.recordRoomDisconnect(DisconnectReason.CLIENT_INITIATED);
+  await report.save('');
+  expect(JSON.parse(exportDiagnosticReport.mock.lastCall![0]).lastRoomDisconnect).toEqual({ time, reason: 'SIGNAL_CLOSE' });
+  room.value = {} as Room;
+  report.start();
+  await vi.advanceTimersByTimeAsync(2_000);
+  await report.save('');
+  expect(JSON.parse(exportDiagnosticReport.mock.lastCall![0]).lastRoomDisconnect).toBeNull();
+  report.recordRoomDisconnect();
+  await report.save('');
+  expect(JSON.parse(exportDiagnosticReport.mock.lastCall![0]).lastRoomDisconnect.reason).toBe('UNKNOWN_REASON');
+});
 
 function persistenceBridge() {
   const bridge = window.lycanDesktop!;

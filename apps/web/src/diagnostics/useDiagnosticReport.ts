@@ -1,5 +1,5 @@
 import { onScopeDispose, ref, shallowRef, watch } from 'vue';
-import type { Participant, Room } from 'livekit-client';
+import { DisconnectReason, type Participant, type Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler, type MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import packageInfo from '../../package.json';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
@@ -396,6 +396,7 @@ export function useDiagnosticReport(options: {
   let sampler = createMediaDiagnosticsSampler();
   let startedAt: string | null = null;
   let endedAt: string | null = null;
+  let lastRoomDisconnect: { time: string; reason: string } | null = null;
   let samples: DiagnosticSample[] = [];
   let sampleBytes = 0;
   let sampleSizes: number[] = [];
@@ -570,6 +571,7 @@ export function useDiagnosticReport(options: {
     sampler = createMediaDiagnosticsSampler();
     // 自动开关恢复时保留此前记录；手动开始仍明确替换上次记录。
     if (!automatic || !startedAt) {
+      lastRoomDisconnect = null;
       problemMarkers.value = [];
       aliases.clear(); samples = []; sampleCount.value = 0; nextSegmentNumber = 1;
       sampleBytes = 0; sampleSizes = []; sampleSequence = 0; discardedSamples.value = 0;
@@ -603,6 +605,12 @@ export function useDiagnosticReport(options: {
     void checkpoint(true);
   }
 
+  function recordRoomDisconnect(reason?: DisconnectReason) {
+    if (!recording.value || disposed) return;
+    lastRoomDisconnect = { time: new Date().toISOString(), reason: reason === undefined ? 'UNKNOWN_REASON'
+      : DisconnectReason[reason] ?? 'UNKNOWN_REASON' };
+  }
+
   function createReport(notes: string) {
     const exportedSamples = samples.slice();
     if (discardedSamples.value && exportedSamples.length) {
@@ -618,9 +626,12 @@ export function useDiagnosticReport(options: {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
+    const reportStart = discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString();
+    const reportEnd = endedAt ?? new Date().toISOString();
     const report = { kind: 'lycansync-diagnostics', schemaVersion: 14,
-      startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
-      endedAt: endedAt ?? new Date().toISOString(),
+      startedAt: reportStart, endedAt: reportEnd,
+      lastRoomDisconnect: lastRoomDisconnect && lastRoomDisconnect.time >= reportStart
+        && Date.parse(reportEnd) - Date.parse(lastRoomDisconnect.time) <= MAX_DURATION_MS ? lastRoomDisconnect : null,
       stopReason: recording.value ? (automaticRecording ? 'automaticSnapshot' : 'manualSnapshot') : reason.value || 'automaticEvents',
       recordingMode: automaticRecording ? 'automatic' : 'manual',
       retention: { maxSamples: MAX_SAMPLES, maxDurationMs: MAX_DURATION_MS, maxSampleBytes: MAX_SAMPLE_BYTES,
@@ -751,6 +762,7 @@ export function useDiagnosticReport(options: {
       await bridge.clearSavedDiagnosticReports();
       if (disposed) return;
       aliases.clear(); streamSegments.clear(); samples = []; sampleSizes = []; sampleBytes = 0;
+      lastRoomDisconnect = null;
       problemMarkers.value = [];
       sampleSequence = 0; nextSegmentNumber = 1; sampleCount.value = 0; discardedSamples.value = 0;
       startedAt = null; endedAt = null; startSettings = null; endSettings = null; lastSampleMonotonicAt = null;
@@ -829,6 +841,6 @@ export function useDiagnosticReport(options: {
   if (automaticEnabled.value) start(true);
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
-  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem,
+  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem, recordRoomDisconnect,
     savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, upload, exportStatus, clearSaved, beginClose, flush };
 }

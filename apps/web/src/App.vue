@@ -152,7 +152,10 @@ const rtc = reactive(useRtcRoom({
     participantEntranceSound: (identity, bytes) => { void callSounds.participantEntranceSound(identity, bytes); },
     screenShareStarted: callSounds.screenShareStarted,
     screenShareStopped: callSounds.screenShareStopped,
-    disconnected: callSounds.left,
+    disconnected: (reason): void => {
+      diagnosticReport.recordRoomDisconnect(reason);
+      callSounds.left();
+    },
     selectNativeScreenSource: requestNativeScreenSource,
   },
 }));

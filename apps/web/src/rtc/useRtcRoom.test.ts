@@ -1580,15 +1580,17 @@ describe('room media lifecycle', () => {
     ['connectionLost', '语音连接已断开。'],
   ])('releases microphone and sharing while preserving the %s notice after cleanup', async (reason, message) => {
     configureNativeScreenDesktop({ screenAudio: true });
+    const disconnected = vi.fn();
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
       processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
-      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources, disconnected },
     }))!;
     try {
       expect(await rtc.join('removed-member-room')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       mockRoom().emit('disconnected', reason);
+      expect(disconnected).toHaveBeenCalledWith(reason);
       expect(rtc.notice.value).toBe(message);
       await vi.waitFor(() => {
         expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
