@@ -247,7 +247,7 @@ test('离房和切回群组先显示已知的语音成员，慢摘要在原处�
   await expect(preview.locator('.voice-preview-member strong')).toHaveText(['成员A']);
 });
 
-test('成员卡片将对方状态放在画面右下角，底栏只显示可操作的音量按钮', async ({ page }, testInfo) => {
+test('成员卡片保留底部麦克风，闭麦时禁用并在画面右下角显示状态', async ({ page }, testInfo) => {
   await sharing(page, ['B']);
   await page.evaluate(() => {
     const rtc = (window as unknown as { __viewingTest: {
@@ -271,11 +271,15 @@ test('成员卡片将对方状态放在画面右下角，底栏只显示可操�
       const { x, width } = element.querySelector(selector)!.getBoundingClientRect();
       return x + width / 2;
     };
-    return [centerX('.member-audio-status'), centerX('.member-audio-status svg'), centerX('.volume-button svg')];
+    return [centerX('.member-audio-status'), centerX('.member-audio-status svg'), centerX('.participant-meta .volume-button:disabled svg')];
   });
   expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(0.5);
   await expect(card('C').locator('.participant-media').getByRole('img', { name: '已停止接收声音' })).toBeVisible();
-  await expect(card('C').locator('.participant-meta button')).toHaveCount(0);
+  const mic = card('B').getByRole('button', { name: '成员B的语音音量暂不可调' });
+  await expect(mic).toBeDisabled();
+  await expect(mic.locator('.lucide-mic-off')).toBeVisible();
+  await expect(mic).toHaveCSS('color', await card('B').locator('.member-signal').evaluate(el => getComputedStyle(el).color));
+  await expect(card('C').getByRole('button', { name: '成员C的语音音量暂不可调' })).toBeDisabled();
   await card('D').getByRole('button', { name: /点击取消收听/ }).click();
   await expect(card('D').getByRole('button', { name: /点击恢复收听/ })).toBeEnabled();
   await expect(card('D').locator('.member-audio-status')).toHaveCount(0);
@@ -285,6 +289,12 @@ test('成员卡片将对方状态放在画面右下角，底栏只显示可操�
   const first = (await cards.first().boundingBox())!, last = (await card('D').boundingBox())!;
   await page.screenshot({ path: testInfo.outputPath('member-card-states.png'),
     clip: { x: first.x, y: first.y, width: last.x + last.width - first.x, height: first.height } });
+  const position = await mic.boundingBox();
+  await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones(['A', 'B', 'D']));
+  const reopened = card('B').getByRole('button', { name: /点击取消收听/ });
+  await expect(reopened).toBeEnabled();
+  await expect(card('B').locator('.member-audio-status')).toHaveCount(0);
+  expect(await reopened.boundingBox()).toEqual(position);
 });
 
 test('聚焦只播放选中的共享声音，切回网格或成员卡片恢复各自音量', async ({ page }) => {
