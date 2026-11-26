@@ -66,6 +66,7 @@ void VoiceReference::configure(bool enabled, const std::string &selector) {
   if (device.empty()) return;
   auto *settings = obs_data_create();
   obs_data_set_string(settings, "device_id", device.c_str());
+  obs_data_set_bool(settings, "lycansync_trace_startup", true);
   obs_data_set_bool(settings, "use_device_timing", true);
   source_ = obs_source_create_private("lycansync_system_output_capture", "LycanSync echo reference", settings);
   obs_data_release(settings);

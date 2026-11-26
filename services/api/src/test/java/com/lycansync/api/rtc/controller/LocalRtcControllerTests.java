@@ -98,6 +98,7 @@ class LocalRtcControllerTests {
                         .content("{\"groupId\":\"" + GROUP_ID + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("Server-Timing", org.hamcrest.Matchers.matchesPattern("rtc;dur=\\d+")))
                 .andExpect(jsonPath("$.serverUrl").value("ws://127.0.0.1:7880"))
                 .andExpect(jsonPath("$.roomName").value("lycan-sync-group-" + GROUP_ID))
                 .andExpect(jsonPath("$.participantIdentity").value("user-" + AUTHENTICATED_USER.id()))

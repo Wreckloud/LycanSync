@@ -50,6 +50,23 @@ test('录制摘要保留真实输出数和固定故障，排除文件名及原�
   assert.doesNotMatch(JSON.stringify(replay), /private-/);
 });
 
+test('语音分段耗时可导出，旧服务器缺少的计时保持缺省', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-startup-timing-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'microphoneStartupTiming', source: 'input', attempts: 2, failedPhase: 'openDevice', afterFailureMs: 3010,
+      hresult: '0x88890004', outcome: 'firstPacket', deviceId: 'private-device' },
+    { stage: 'voiceTokenRequest', prepareMs: 5, upstreamHeadersMs: 400, httpStatus: 200, outcome: 'response', token: 'private-token' },
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.deepEqual(events, [
+    { time, stage: 'microphoneStartupTiming', hresults: ['0x88890004'], source: 'input', attempts: 2,
+      failedPhase: 'openDevice', afterFailureMs: 3010, outcome: 'firstPacket' },
+    { time, stage: 'voiceTokenRequest', hresults: [], prepareMs: 5, upstreamHeadersMs: 400, httpStatus: 200, outcome: 'response' },
+  ]);
+});
+
 test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常正文', async context => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-voice-diagnostics-'));
   context.after(() => rm(directory, { recursive: true, force: true }));

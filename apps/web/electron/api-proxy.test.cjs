@@ -14,7 +14,7 @@ function proxyFixture(overrides = {}) {
   const forwarded = [];
   // 沿用主进程入口隔离测试：执行正式策略与代理函数，不启动客户端、读取真实会话或连接服务器。
   const context = {
-    URL, Headers, Request, Response, Buffer, AbortSignal,
+    URL, Headers, Request, Response, Buffer, AbortSignal, performance, writeMediaDiagnostic() {},
     backend: new URL('https://example.test'),
     sessionToken: 'test-session',
     sessionRevision: 0, sessionLoginInProgress: false, sessionClearTask: undefined,
@@ -31,6 +31,31 @@ function proxyFixture(overrides = {}) {
   const serve = runInNewContext(`${main.slice(policyStart, policyEnd)}\n${main.slice(serveStart, serveEnd)}; serveApplication`, context);
   return { serve, forwarded, context };
 }
+
+test('语音凭证分开记录本地准备、响应头往返和同一响应的服务端计时', async () => {
+  const entries = [];
+  let now = 0;
+  const { serve, context } = proxyFixture({
+    performance: { now: () => now }, writeMediaDiagnostic: entry => entries.push({ ...entry }),
+    loadSession: async () => { now += 12; return 'private-session'; },
+    net: { fetch: async () => {
+      now += 160;
+      return Response.json({ token: 'private-token' }, { headers: { 'Server-Timing': 'rtc;dur=45' } });
+    } },
+  });
+  const request = () => new Request('lycan://app/api/rtc/token', { method: 'POST', body: '{}' });
+  const response = await serve(request());
+  assert.equal((await response.json()).token, 'private-token');
+  assert.deepEqual(entries[0], { stage: 'voiceTokenRequest', durationMs: 172, prepareMs: 12,
+    upstreamHeadersMs: 160, serverIssueMs: 45, httpStatus: 200, outcome: 'response' });
+  context.net.fetch = async () => new Response(null, { status: 403 });
+  await serve(request());
+  assert.equal(entries[1].httpStatus, 403);
+  assert.equal(Object.hasOwn(entries[1], 'serverIssueMs'), false);
+  context.net.fetch = async () => { now += 70; throw Error('private connection details'); };
+  await serve(request());
+  assert.deepEqual(entries[2], { stage: 'voiceTokenRequest', durationMs: 82, prepareMs: 12, upstreamHeadersMs: 70, outcome: 'networkError' });
+});
 
 test('原生下载仅保存已授权群文件，系统取消不请求数据，成功写盘后才返回', async t => {
   const { mkdtemp, readFile, rm } = require('node:fs/promises');

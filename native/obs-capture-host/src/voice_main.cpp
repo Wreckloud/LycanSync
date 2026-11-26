@@ -25,8 +25,23 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
+const auto host_started = Clock::now();
+void event(const char *name, std::string_view fields = "");
 std::atomic<unsigned long> audio_hresult = 0;
 void audio_log(int, const char *format, va_list args, void *) {
+  if (std::string_view(format) == "LycanSync startup %lu %d %s %08lX") {
+    const auto instance = va_arg(args, unsigned long);
+    const bool reference = va_arg(args, int) != 0;
+    const std::string_view phase(va_arg(args, const char *));
+    const auto result = va_arg(args, unsigned long);
+    if (phase != "queued" && phase != "openDevice" && phase != "initializeClient" && phase != "startStream"
+        && phase != "waitPacket" && phase != "firstPacket" && phase != "afterFailure") return;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - host_started).count();
+    event("startupPhase", ",\"source\":\"" + std::string(reference ? "reference" : "input")
+        + "\",\"instance\":" + std::to_string(instance) + ",\"phase\":\"" + std::string(phase) + "\",\"atMs\":" + std::to_string(elapsed)
+        + ",\"result\":" + std::to_string(result));
+    return;
+  }
   // 只提取固定 WASAPI 失败模板中的错误码，不记录设备名称或异常正文。
   if (std::string_view(format) == "[CreateWASAPISource] %s: %lX") {
     va_arg(args, const char *);
@@ -63,7 +78,9 @@ bool pipe_id(std::wstring_view value) {
   }
   return true;
 }
-void event(const char *name, std::string_view fields = "") {
+void event(const char *name, std::string_view fields) {
+  static std::mutex output;
+  const std::lock_guard<std::mutex> lock(output);
   std::cout << "{\"event\":\"" << name << '"' << fields << "}\n" << std::flush;
 }
 void failure_event(std::string_view code, const char *pipe_phase = "", DWORD pipe_error = ERROR_SUCCESS) {
@@ -259,6 +276,7 @@ int capture(int argc, wchar_t **argv) {
   register_voice_filter();
   obs_data_t *values = obs_data_create();
   obs_data_set_string(values, "device_id", utf8(argv[6]).c_str());
+  obs_data_set_bool(values, "lycansync_trace_startup", true);
   Source sourceOwner(obs_source_create_private("wasapi_input_capture", "LycanSync microphone", values));
   auto *source = sourceOwner.get();
   obs_data_release(values);

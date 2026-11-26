@@ -28,6 +28,43 @@ function settingsCommand(settings) {
   return `${settings.inputGain}|${Number(settings.noiseSuppression)}${Number(settings.autoGainControl)}${Number(settings.voiceEnhancement)}${Number(settings.echoCancellation)}`;
 }
 
+const startupPhases = new Set(['queued', 'openDevice', 'initializeClient', 'startStream', 'waitPacket', 'afterFailure', 'firstPacket']);
+
+function unfinishedStartup(trace, outcome) {
+  return { ...trace.summary, lastPhase: trace.phase, outcome,
+    pendingMs: Math.round(performance.now() - trace.receivedAt) };
+}
+
+function recordStartupPhase(pending, event, report) {
+  const { source, instance, phase, atMs, result } = event;
+  if (!['input', 'reference'].includes(source) || !startupPhases.has(phase) || !Number.isSafeInteger(atMs) || atMs < 0
+      || !Number.isSafeInteger(instance) || instance <= 0 || !Number.isInteger(result) || result < 0 || result > 0xffffffff) return;
+  const previous = pending.get(source);
+  if (phase === 'queued') {
+    if (previous) report(unfinishedStartup(previous, 'replaced'));
+    pending.set(source, { instance, atMs, phase, receivedAt: performance.now(), summary: { stage: 'microphoneStartupTiming', source, attempts: 0 } });
+    return;
+  }
+  if (!previous || previous.instance !== instance || atMs < previous.atMs) return;
+  const summary = previous.summary;
+  const key = previous.phase + 'Ms';
+  summary[key] = (summary[key] ?? 0) + atMs - previous.atMs;
+  if (phase === 'openDevice') summary.attempts++;
+  if (phase === 'afterFailure') {
+    summary.failedPhase = previous.phase;
+    if (result) summary.hresult = '0x' + result.toString(16).toUpperCase().padStart(8, '0');
+    else delete summary.hresult;
+  }
+  if (phase === 'firstPacket') {
+    pending.delete(source);
+    report({ ...summary, outcome: 'firstPacket' });
+  } else {
+    previous.phase = phase;
+    previous.atMs = atMs;
+    previous.receivedAt = performance.now();
+  }
+}
+
 // 麦克风拥有独立 OBS 进程，视频预热、换显卡与共享故障不得撤销它。
 class ObsAudioHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
@@ -59,7 +96,7 @@ class ObsAudioHostManager {
         pipeId, settingsCommand(settings), deviceId, pushToTalk ? '1' : '0', this.referenceSelector], { cwd: win32.dirname(this.executablePath), windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'] });
     } catch { return Promise.reject(new Error('microphoneCaptureStartFailed')); }
-    const state = { child, sessionId, alive: true, buffer: '', requests: new Map(), sequence: 0,
+    const state = { child, sessionId, alive: true, buffer: '', requests: new Map(), startup: new Map(), sequence: 0,
       referenceSelector: this.referenceSelector, ready: false, stopped: false, pushToTalk, startedAt: performance.now() };
     this.state = state;
     state.start = new Promise((resolve, reject) => { state.resolveStart = resolve; state.rejectStart = reject; });
@@ -90,7 +127,9 @@ class ObsAudioHostManager {
       if (!event || typeof event !== 'object' || Array.isArray(event)) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
       // 失败后只接收停止确认，迟到就绪不能恢复已撤销的采集。
       if (state.failed && event.event !== 'stopped') continue;
-      if (event.event === 'ready' && !state.ready && !state.stopping
+      if (event.event === 'startupPhase') {
+        if (!state.stopping) recordStartupPhase(state.startup, event, this.onDiagnostic);
+      } else if (event.event === 'ready' && !state.ready && !state.stopping
           && event.obsVersion === '32.2.2' && event.processing === 'aec3+rnnoise-obs32.2.2+sonora-0.2.0'
           && event.sampleRate === 48000 && event.channels === 1 && event.bitsPerSample === 32 && event.nominalChunkMs === 10) {
         state.ready = true;
@@ -106,6 +145,13 @@ class ObsAudioHostManager {
         this.onDiagnostic({ stage: 'microphoneReady', backend: 'obsLibobs', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0',
           durationMs: Math.round(performance.now() - state.startedAt), ...timing });
       } else if (event.event === 'echo' && ['disabled', 'pending', 'ready', 'unavailable'].includes(event.status)) {
+        if (event.status === 'disabled' || event.status === 'unavailable') {
+          const reference = state.startup.get('reference');
+          if (reference) {
+            this.onDiagnostic(unfinishedStartup(reference, event.status));
+            state.startup.delete('reference');
+          }
+        }
         if (!state.stopping) {
           this.onDiagnostic({ stage: 'microphoneEchoState', status: event.status });
         }
@@ -214,10 +260,18 @@ class ObsAudioHostManager {
     state.requests.clear();
   }
 
+  finishStartup(state, outcome) {
+    for (const trace of state.startup.values()) {
+      this.onDiagnostic(unfinishedStartup(trace, outcome));
+    }
+    state.startup.clear();
+  }
+
   close(state, code) {
     if (!state.alive) return;
     const expected = state.stopping && state.stopped && code === 0;
     state.alive = false;
+    this.finishStartup(state, 'exited');
     clearTimeout(state.startTimer); clearTimeout(state.stopTimer); clearTimeout(state.killTimer);
     state.rejectStart(new Error(state.failed || 'microphoneCaptureSessionStopped'));
     this.rejectRequests(state, 'microphoneCaptureSessionStopped');
@@ -238,6 +292,7 @@ class ObsAudioHostManager {
     if (state.sessionId !== sessionId) return Promise.reject(new Error('microphoneCaptureSessionMismatch'));
     if (state.stop) return state.stop;
     state.stopping = true;
+    this.finishStartup(state, state.failed ? 'failed' : 'stopped');
     state.stopStartedAt = performance.now();
     clearTimeout(state.startTimer);
     state.rejectStart(new Error('microphoneCaptureSessionStopped'));

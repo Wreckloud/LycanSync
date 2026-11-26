@@ -651,6 +651,8 @@ async function serveApplication(request) {
       ?? (request.method === 'POST' && groupFilePath.test(url.pathname) && url.pathname.endsWith('/files')
         ? { streamBody: true } : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
+    const tokenRequest = request.method === 'POST' && url.pathname === '/api/rtc/token'
+      ? { startedAt: performance.now() } : null;
     let failureMessage = '无法读取请求内容，请重试。';
     let ownsLogin = false;
     let loginRevision;
@@ -671,6 +673,7 @@ async function serveApplication(request) {
         loginRevision = sessionRevision;
       }
       failureMessage = '无法连接服务器，请检查网络和服务器状态。';
+      if (tokenRequest) tokenRequest.sentAt = performance.now();
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
@@ -689,6 +692,12 @@ async function serveApplication(request) {
           AbortSignal.timeout(streamingUpload || routePolicy.reportTransfer || groupFileDownloadPath.test(url.pathname) || groupFileMediaPath.test(url.pathname) ? 30 * 60_000
             : routePolicy.longPolling ? 52_000 : 15000)]),
       });
+      if (tokenRequest) {
+        tokenRequest.headersAt = performance.now();
+        tokenRequest.httpStatus = response.status;
+        const timing = /(?:^|,)\s*rtc;dur=(\d{1,6})(?=\s*(?:,|$))/.exec(response.headers.get('Server-Timing') ?? '');
+        if (timing) tokenRequest.serverIssueMs = Number(timing[1]);
+      }
       const currentSessionUnauthorized = !routePolicy.public && Boolean(token)
         && response.status === 401 && token === sessionToken;
       if (!routePolicy.public && token === sessionToken
@@ -736,7 +745,20 @@ async function serveApplication(request) {
     } catch {
       if (ownsLogin && loginRevision !== sessionRevision) return Response.json({ detail: '登录流程已变化，请重新确认。' }, { status: 409 });
       return Response.json({ message: failureMessage }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-    } finally { if (ownsLogin) sessionLoginInProgress = false; }
+    } finally {
+      if (ownsLogin) sessionLoginInProgress = false;
+      if (tokenRequest) {
+        const { startedAt, sentAt, headersAt, httpStatus, serverIssueMs } = tokenRequest;
+        const end = headersAt ?? performance.now();
+        void writeMediaDiagnostic({ stage: 'voiceTokenRequest', durationMs: Math.round(end - startedAt),
+          prepareMs: Math.round((sentAt ?? end) - startedAt),
+          ...(sentAt === undefined ? {} : { upstreamHeadersMs: Math.round(end - sentAt) }),
+          ...(serverIssueMs === undefined ? {} : { serverIssueMs }),
+          ...(httpStatus === undefined ? {} : { httpStatus }),
+          outcome: headersAt !== undefined ? 'response' : request.signal.aborted ? 'cancelled'
+            : sentAt !== undefined ? 'networkError' : 'localError' });
+      }
+    }
   }
   if (request.method !== 'GET') return new Response(null, { status: 405 });
   // 保留桌面同源 API 和权限边界，仅把开发资源交给 Vite；热更新 WebSocket 直连本机。

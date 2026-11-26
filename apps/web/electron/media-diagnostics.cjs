@@ -211,6 +211,24 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
             if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) audioTiming[key] = entry[key];
           }
         }
+        if (stage === 'microphoneStartupTiming') {
+          if (['input', 'reference'].includes(entry.source)) details.source = entry.source;
+          if (['firstPacket', 'failed', 'exited', 'stopped', 'replaced', 'disabled', 'unavailable'].includes(entry.outcome)) details.outcome = entry.outcome;
+          for (const key of ['failedPhase', 'lastPhase']) {
+            if (['queued', 'openDevice', 'initializeClient', 'startStream', 'waitPacket', 'afterFailure'].includes(entry[key])) details[key] = entry[key];
+          }
+          for (const key of ['attempts', 'queuedMs', 'openDeviceMs', 'initializeClientMs', 'startStreamMs', 'waitPacketMs', 'afterFailureMs', 'pendingMs']) {
+            if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
+          }
+          if (typeof entry.hresult === 'string' && /^0x[\da-f]{8}$/i.test(entry.hresult)) hresults.push(entry.hresult);
+        }
+        if (stage === 'voiceTokenRequest') {
+          for (const key of ['prepareMs', 'upstreamHeadersMs', 'serverIssueMs']) {
+            if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
+          }
+          if (Number.isInteger(entry.httpStatus) && entry.httpStatus >= 100 && entry.httpStatus <= 599) details.httpStatus = entry.httpStatus;
+          if (['response', 'networkError', 'localError', 'cancelled'].includes(entry.outcome)) details.outcome = entry.outcome;
+        }
         if (stage === 'voiceJoinReady') {
           for (const key of ['preflightMs', 'tokenMs', 'connectMs', 'roomReadyMs', 'microphoneMs', 'listeningMs']) {
             if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];

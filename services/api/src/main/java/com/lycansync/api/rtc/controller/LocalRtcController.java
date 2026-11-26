@@ -11,11 +11,13 @@ import com.lycansync.api.rtc.service.SharedVoiceTimeService;
 import com.lycansync.api.rtc.dto.VoiceTimeResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.headers.Header;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
@@ -64,18 +66,26 @@ public class LocalRtcController {
     @PostMapping(value = "/token", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "签发群组语音凭证", description = "仅当前群成员可进入语音房间")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "凭证签发成功，不代表媒体连接成功"),
+            @ApiResponse(responseCode = "200", description = "凭证签发成功，不代表媒体连接成功",
+                    headers = @Header(name = "Server-Timing", description = "rtc 指标为成员校验与凭证签发的服务耗时（毫秒）",
+                            schema = @Schema(type = "string", example = "rtc;dur=12"))),
             @ApiResponse(responseCode = "400", description = "请求参数无效",
                     content = @Content(mediaType = "application/problem+json",
                             schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "404", description = "业务房间不存在")
     })
     public ResponseEntity<RtcTokenResponse> issueToken(@Valid @RequestBody LocalRtcTokenRequest request,
-                                                      @AuthenticationPrincipal AuthenticatedUser user) {
+                                                      @AuthenticationPrincipal AuthenticatedUser user,
+                                                      HttpServletResponse response) {
         // 凭证不能被缓存后重复分发，每次申请都交由 Service 签发。
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .body(localRtcTokenService.issueToken(request.groupId(), user));
+        long startedAt = System.nanoTime();
+        try {
+            return ResponseEntity.ok()
+                    .cacheControl(CacheControl.noStore())
+                    .body(localRtcTokenService.issueToken(request.groupId(), user));
+        } finally {
+            response.setHeader("Server-Timing", "rtc;dur=" + (System.nanoTime() - startedAt) / 1_000_000);
+        }
     }
 
     @GetMapping("/room-summary")

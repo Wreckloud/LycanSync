@@ -52,6 +52,38 @@ function fixture(context, mode = {}) {
   return { manager, children, failures, diagnostics, spawns, start, started };
 }
 
+test('输入与播放参考分别汇总首包，重试保留失败阶段和等待时间', async context => {
+  const { manager, children, diagnostics, start } = fixture(context);
+  const pending = start();
+  const phase = (source, phase, atMs, result = 0) => children[0].send({ event: 'startupPhase', source,
+    instance: source === 'input' ? 1 : 2, phase, atMs, result });
+  phase('input', 'queued', 6);
+  phase('reference', 'queued', 8);
+  phase('input', 'openDevice', 10);
+  phase('input', 'afterFailure', 22, 0x88890004);
+  phase('reference', 'openDevice', 15);
+  children[0].send({ event: 'startupPhase', source: 'reference', instance: 9, phase: 'firstPacket', atMs: 18, result: 0 });
+  phase('reference', 'initializeClient', 20);
+  phase('reference', 'startStream', 24);
+  phase('reference', 'waitPacket', 26);
+  phase('reference', 'firstPacket', 626);
+  phase('input', 'openDevice', 3022);
+  phase('input', 'initializeClient', 3030);
+  phase('input', 'startStream', 3040);
+  phase('input', 'waitPacket', 3042);
+  phase('input', 'firstPacket', 3050);
+  children[0].send(ready);
+  await pending;
+  assert.deepEqual(diagnostics.filter(entry => entry.stage === 'microphoneStartupTiming'), [
+    { stage: 'microphoneStartupTiming', source: 'reference', attempts: 1, queuedMs: 7,
+      openDeviceMs: 5, initializeClientMs: 4, startStreamMs: 2, waitPacketMs: 600, outcome: 'firstPacket' },
+    { stage: 'microphoneStartupTiming', source: 'input', attempts: 2, queuedMs: 4, failedPhase: 'openDevice',
+      hresult: '0x88890004', afterFailureMs: 3000, openDeviceMs: 20, initializeClientMs: 10,
+      startStreamMs: 2, waitPacketMs: 8, outcome: 'firstPacket' },
+  ]);
+  await manager.stop('voice-session');
+});
+
 test('麦克风按需启动，首块确认、配置和正常停止只持有一个音频宿主', async context => {
   const { manager, children, diagnostics, spawns, start } = fixture(context);
   assert.equal(children.length, 0);
