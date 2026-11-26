@@ -922,7 +922,7 @@ ipcMain.handle('update:skip', (event) => {
 ipcMain.on('media:voice-join-timing', (event, timing) => {
   if (!trustedSender(event) || closing || !timing || typeof timing.microphoneEnabled !== 'boolean') return;
   const entry = { stage: 'voiceJoinReady', microphoneEnabled: timing.microphoneEnabled };
-  for (const key of ['durationMs', 'preflightMs', 'tokenMs', 'connectMs', 'microphoneMs', 'listeningMs']) {
+  for (const key of ['durationMs', 'preflightMs', 'tokenMs', 'connectMs', 'roomReadyMs', 'microphoneMs', 'listeningMs']) {
     const duration = timing[key];
     if (!Number.isFinite(duration) || duration < 0 || duration > 300_000) return;
     entry[key] = Math.round(duration);

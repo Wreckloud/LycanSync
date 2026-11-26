@@ -22,6 +22,40 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
 });
 
+test('双击入房并行读取成员资料，切走预览后仍处理原群的成员资格变更', async ({ page }) => {
+  const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
+  const first = { id: groupId, name: '当前预览', description: '', avatar: '', role: 'OWNER',
+    memberCount: 1, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z' };
+  const target = { ...first, id: '01b08c29-d1e5-4bca-987f-64946541e93c', name: '准备加入' };
+  let canJoin = true;
+  const detailRequests: Route[] = [];
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/system/initialization', route => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', route => route.fulfill({ json: user }));
+  await page.route('**/api/groups', route => route.fulfill({ json: canJoin ? [first, target] : [first] }));
+  await page.route(`**/api/groups/${first.id}`, route => route.fulfill({ json: { ...first, members: [] } }));
+  await page.route(`**/api/groups/${target.id}`, route => { detailRequests.push(route); });
+  await page.route('**/api/groups/*/presence-changes*', () => {});
+  await page.route('**/api/rtc/token', () => {});
+
+  await page.goto('/');
+  const targetButton = page.getByRole('button', { name: /^准备加入，/ });
+  const token = page.waitForRequest('**/api/rtc/token');
+  await targetButton.dblclick();
+  await token;
+  expect(detailRequests).toHaveLength(1);
+  await expect(page.getByRole('button', { name: '取消连接' })).toBeVisible();
+
+  const firstButton = page.getByRole('button', { name: /^当前预览，/ });
+  await firstButton.click();
+  canJoin = false;
+  await detailRequests[0].fulfill({ status: 403, json: { detail: '成员资格已撤销' } });
+  await expect(targetButton).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '取消连接' })).toHaveCount(0);
+  await expect(firstButton).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('创建群组只预览，初始只有创建者且不自动加入语音', async ({ page }) => {
   const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
   const members = [

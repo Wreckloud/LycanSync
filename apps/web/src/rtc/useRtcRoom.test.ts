@@ -1898,6 +1898,25 @@ describe('room media lifecycle', () => {
     }
   });
 
+  it('times room readiness from the join action and reports media completion separately', async () => {
+    configureNativeMicrophoneDesktop();
+    const report = vi.fn();
+    window.lycanDesktop!.reportVoiceJoinTiming = report;
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(700);
+    try {
+      expect(await rtc.join('timed-room', () => { clock.mockReturnValue(4800); }, 100)).toBe(true);
+      expect(report).toHaveBeenCalledWith(expect.objectContaining({
+        preflightMs: 600, roomReadyMs: 600, durationMs: 4700,
+      }));
+    } finally {
+      clock.mockRestore();
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
   it('announces a connected room before the microphone is ready and ignores completion after switching rooms', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     const delayedMicrophone = deferred<never[]>();

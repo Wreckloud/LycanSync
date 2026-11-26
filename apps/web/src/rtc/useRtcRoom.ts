@@ -401,10 +401,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     void currentRoom?.disconnect();
   });
 
-  async function join(groupId: string, onConnected?: () => void): Promise<boolean> {
+  async function join(groupId: string, onConnected?: () => void, startedAt = performance.now()): Promise<boolean> {
     if (pendingJoin.value || activeRoom.value) return false;
 
-    const startedAt = performance.now();
     // 1. 先申请临时凭证；取消入房时中止请求，过期请求不能建立新连接。
     const request = new AbortController();
     pendingJoin.value = request;
@@ -647,12 +646,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         synchronizeListeningAttribute(currentRoom).then(() => performance.now() - mediaStartedAt),
       ]);
       // 先让界面进入已连接状态；麦克风仍由本次房间任务管理和计时。
+      const roomReadyMs = performance.now() - startedAt;
       onConnected?.();
       const [microphoneMs, listeningMs] = await mediaReady;
       if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
       window.lycanDesktop?.reportVoiceJoinTiming?.({
         durationMs: performance.now() - startedAt, preflightMs: tokenStartedAt - startedAt,
-        tokenMs, connectMs, microphoneMs, listeningMs, microphoneEnabled: microphoneEnabled.value,
+        tokenMs, connectMs, roomReadyMs, microphoneMs, listeningMs, microphoneEnabled: microphoneEnabled.value,
       });
       return true;
     } catch (error) {

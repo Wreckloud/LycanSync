@@ -212,7 +212,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           }
         }
         if (stage === 'voiceJoinReady') {
-          for (const key of ['preflightMs', 'tokenMs', 'connectMs', 'microphoneMs', 'listeningMs']) {
+          for (const key of ['preflightMs', 'tokenMs', 'connectMs', 'roomReadyMs', 'microphoneMs', 'listeningMs']) {
             if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
           }
           if (typeof entry.microphoneEnabled === 'boolean') details.microphoneEnabled = entry.microphoneEnabled;

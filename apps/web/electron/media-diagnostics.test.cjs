@@ -420,7 +420,7 @@ test('语音入房摘要校验阶段耗时并保留关麦状态，不记录附�
     ipcMain: { on: (_channel, listener) => { receive = listener; } },
     writeMediaDiagnostic: entry => entries.push(entry),
   });
-  const timing = { durationMs: 901, preflightMs: 20, tokenMs: 111, connectMs: 450,
+  const timing = { durationMs: 901, preflightMs: 20, tokenMs: 111, connectMs: 450, roomReadyMs: 590,
     microphoneMs: 305, listeningMs: 37, microphoneEnabled: false };
   receive({ trusted: false }, timing);
   receive({ trusted: true }, { ...timing, connectMs: -1 });

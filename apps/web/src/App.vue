@@ -216,7 +216,8 @@ onScopeDispose(() => {
   viewingWindows.value?.closeAll();
   removeCloseListener?.();
   closeGroupEditor(); management.value = null;
-  detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
+  for (const request of detailRequests.values()) request.abort();
+  listRequest?.abort(); void rtc.leave();
 });
 watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource(null); });
 const groups = ref<GroupSummary[]>([]);
@@ -247,7 +248,7 @@ watch(initialLoading, loading => { if (!loading) emit('ready'); }, { flush: 'syn
 const editorOpen = ref(false);
 const editingGroup = ref<GroupSummary | null>(null);
 const management = ref<{ group: GroupSummary & Partial<Pick<GroupDetail, 'members'>>; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
-let detailRequest: AbortController | null = null;
+const detailRequests = new Map<string, AbortController>();
 let listRequest: AbortController | null = null;
 let groupEditorGeneration = 0;
 const { groupPresences, presenceConnectionLost, refreshGroupPresence } = useGroupPresences(selectedGroupId,
@@ -299,13 +300,22 @@ async function refreshRoomOccupancies(force = false) {
 
 async function loadGroup(groupId: string, keepExisting = false) {
   const cacheRevision = accountCache.revision;
-  detailRequest?.abort();
+  // 切换预览时，正在加入或已连接的群仍需要这份成员资料。
+  for (const [id, pending] of detailRequests) {
+    if (id === groupId || (id !== selectedGroupId.value && id !== joinedGroupId.value && id !== joiningGroupId.value)) {
+      pending.abort();
+      detailRequests.delete(id);
+    }
+  }
   const request = new AbortController();
-  detailRequest = request;
-  if (!keepExisting) selectedGroupDetail.value = null;
-  groupError.value = '';
-  groupLoading.value = !keepExisting;
-  if (!keepExisting) void accountCache.read<GroupDetail>('members', groupId).then(cached => {
+  detailRequests.set(groupId, request);
+  const previewing = selectedGroupId.value === groupId;
+  if (previewing) {
+    if (!keepExisting) selectedGroupDetail.value = null;
+    groupError.value = '';
+    groupLoading.value = !keepExisting;
+  }
+  if (previewing && !keepExisting) void accountCache.read<GroupDetail>('members', groupId).then(cached => {
     const valid = cached?.id === groupId && Array.isArray(cached.members)
       && cached.members.every(member => member && typeof member.userId === 'string' && typeof member.nickname === 'string');
     if (cached && !valid) void accountCache.discard('members', groupId);
@@ -317,9 +327,10 @@ async function loadGroup(groupId: string, keepExisting = false) {
   });
   try {
     const detail = await findGroup(groupId, request.signal);
-    if (!request.signal.aborted && selectedGroupId.value === groupId) {
+    if (request.signal.aborted) return;
+    if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) joinedGroupDetail.value = detail;
+    if (selectedGroupId.value === groupId) {
       selectedGroupDetail.value = detail;
-      if (joinedGroupId.value === groupId) joinedGroupDetail.value = detail;
       if (management.value?.group.id === groupId) management.value.group = detail;
       if (accountCache.revision === cacheRevision) void accountCache.write('members', groupId, detail);
     }
@@ -339,6 +350,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
       }
     }
   } finally {
+    if (detailRequests.get(groupId) === request) detailRequests.delete(groupId);
     if (!request.signal.aborted && selectedGroupId.value === groupId) groupLoading.value = false;
   }
 }
@@ -377,9 +389,12 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     }
     if (selectedGroupId.value) {
       const selectedSummary = result.find((group) => group.id === selectedGroupId.value);
-      const keepExisting = selectedGroupDetail.value?.id === selectedGroupId.value;
-      if (refreshDetail || !keepExisting || selectedGroupDetail.value?.memberCount !== selectedSummary?.memberCount
-          || selectedGroupDetail.value?.updatedAt !== selectedSummary?.updatedAt || selectedGroupDetail.value?.role !== selectedSummary?.role) {
+      const detail = selectedGroupDetail.value;
+      const keepExisting = detail?.id === selectedGroupId.value;
+      const needsDetail = keepExisting
+        ? detail.memberCount !== selectedSummary?.memberCount || detail.updatedAt !== selectedSummary?.updatedAt || detail.role !== selectedSummary?.role
+        : !detailRequests.has(selectedGroupId.value);
+      if (refreshDetail || needsDetail) {
         void loadGroup(selectedGroupId.value, keepExisting);
       }
     } else selectedGroupDetail.value = null;
@@ -840,6 +855,7 @@ watch([listening, remoteAudioTracks], ([enabled, tracks]) => {
   if (!enabled) tracks.forEach((item) => setRemotePlaybackVolume(item.track, 0));
 }, { flush: 'sync' });
 async function joinGroup(groupId: string) {
+  const startedAt = performance.now();
   selectCaptureSource(null);
   viewingWindows.value?.closeAll();
   const attempt = ++joinAttempt;
@@ -866,18 +882,9 @@ async function joinGroup(groupId: string) {
   }
 
   if (attempt !== joinAttempt) return;
-  try {
-    const detail = selectedGroupDetail.value?.id === groupId
-      ? selectedGroupDetail.value : await findGroup(groupId);
-    if (attempt !== joinAttempt) return;
-    joinedGroupDetail.value = detail;
-  } catch (error) {
-    if (attempt !== joinAttempt) return;
-    viewerNotice.value = error instanceof Error ? error.message : '无法读取群组成员';
-    joiningGroupId.value = null;
-    return;
-  }
-  if (attempt !== joinAttempt) return;
+  // 服务端签发语音凭证时校验成员资格；头像和成员资料可以并行加载。
+  joinedGroupDetail.value = selectedGroupDetail.value?.id === groupId ? selectedGroupDetail.value : null;
+  if (!joinedGroupDetail.value && !detailRequests.has(groupId)) void loadGroup(groupId);
 
   await rtc.join(groupId, () => {
     if (attempt !== joinAttempt) return;
@@ -891,8 +898,8 @@ async function joinGroup(groupId: string) {
       try { void rtc.sendEntranceSound(entranceSoundToFile(entranceSound)); }
       catch { viewerNotice.value = '本机保存的入场音效已损坏，请在“音效”设置中重新选择。'; }
     }
-    void refreshGroups();
-  });
+    void refreshGroups(false);
+  }, startedAt);
   if (attempt === joinAttempt) joiningGroupId.value = null;
 }
 
@@ -1066,7 +1073,9 @@ function toggleSharedAudio(identity: string) {
 function previewGroup(groupId: string) {
   const changed = selectedGroupId.value !== groupId;
   selectedGroupId.value = groupId;
-  void loadGroup(groupId, !changed && selectedGroupDetail.value?.id === groupId);
+  if (changed || !detailRequests.has(groupId)) {
+    void loadGroup(groupId, !changed && selectedGroupDetail.value?.id === groupId);
+  }
   if (changed) void refreshRoomOccupancies();
   pendingSwitchGroupId.value = null;
   viewerNotice.value = '';
@@ -1152,7 +1161,7 @@ function participantListening(participant: Participant) {
             :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
             :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
             :aria-describedby="descriptionId"
-            @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
+            @click="$event.detail < 2 && previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
             <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
             <span v-else>{{ group.name.slice(0, 1) }}</span>
             <span v-if="groupHasVoiceActivity(group.id)" class="group-call-badge" aria-hidden="true"><Volume2 :size="12" :stroke-width="2.6" /></span>

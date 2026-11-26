@@ -197,7 +197,7 @@ interface Window {
     restartForUpdate(): Promise<void>;
     skipStartupUpdate(): Promise<void>;
     reportStartupTiming(stage: 'loginDataReady' | 'loginReady', durationMs: number): void;
-    reportVoiceJoinTiming(timing: { durationMs: number; preflightMs: number; tokenMs: number; connectMs: number;
+    reportVoiceJoinTiming(timing: { durationMs: number; preflightMs: number; tokenMs: number; connectMs: number; roomReadyMs: number;
       microphoneMs: number; listeningMs: number; microphoneEnabled: boolean }): void;
     reportCapturePickerTiming(stage: 'screenPickerSourcesReady' | 'screenPickerPreviewReady' | 'screenPickerVisibleReady' | 'screenPickerSelectionReady' | 'screenPickerClosed', durationMs: number,
       details?: { pickerId: number; sourceCount: number; readyCount: number; confirmed?: boolean }): void;
