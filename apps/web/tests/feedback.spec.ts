@@ -10,17 +10,19 @@ import { createApp, ref, h } from ${JSON.stringify(vuePath)};
 import InlineFeedback from '/src/components/InlineFeedback.vue';
 import '/src/styles.css';
 import '/src/settings/settings.css';
-const pending = ref(''), message = ref('');
+const pending = ref(''), message = ref(''), pendingKey = ref('');
 createApp({ render: () => h('main', { style: 'padding:24px;max-width:650px;margin:auto' }, [
   h('div', { class: 'settings-actions' }, [
     h('button', { onClick: () => { message.value = ''; pending.value = '正在保存…'; } }, '开始等待'),
     h('button', { onClick: () => { pending.value = ''; message.value = ''; } }, '结束等待'),
     h('button', { onClick: () => { pending.value = '正在读取…'; } }, '换个操作'),
+    h('button', { onClick: () => { pendingKey.value = 'save-clip'; pending.value = '正在保存片段 20%…'; } }, '保存片段'),
+    h('button', { onClick: () => { pending.value = '正在保存片段 80%…'; } }, '更新进度'),
     h('button', { onClick: () => { message.value = '保存失败，请检查服务器连接后重试。'.repeat(8); } }, '模拟失败'),
   ]),
   h('footer', { class: 'card-actions', style: 'margin-top:24px' }, [
     h('button', { type: 'button' }, '取消'),
-    h(InlineFeedback, { class: 'card-feedback', message: message.value, pending: pending.value }),
+    h(InlineFeedback, { class: 'card-feedback', message: message.value, pending: pending.value, pendingKey: pendingKey.value || undefined }),
     h('button', { type: 'button', class: 'confirm-button card-actions-end' }, '保存'),
   ]),
 ]) }).mount('#root');
@@ -49,6 +51,11 @@ createApp({ render: () => h('main', { style: 'padding:24px;max-width:650px;margi
   await expect(page.getByRole('status')).toHaveCount(0);
   await page.clock.runFor(100);
   await expect(page.getByRole('status')).toHaveText('正在读取…');
+  await page.getByRole('button', { name: '保存片段', exact: true }).click();
+  await page.clock.runFor(600);
+  await page.getByRole('button', { name: '更新进度', exact: true }).click();
+  await page.clock.runFor(400);
+  await expect(page.getByRole('status')).toHaveText('正在保存片段 80%…');
   await page.getByRole('button', { name: '模拟失败' }).click();
   await expect(page.getByRole('alert')).toContainText('保存失败');
   await expect(page.getByRole('status')).toHaveCount(0);

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useLoadingHint } from './useLoadingHint';
 
-const props = defineProps<{ message?: string; status?: string; pending?: string }>();
-const pendingVisible = useLoadingHint(() => !props.message && !props.status ? props.pending || '' : '');
+const props = defineProps<{ message?: string; status?: string; pending?: string; pendingKey?: string }>();
+const pendingVisible = useLoadingHint(() => !props.message && !props.status && !!props.pending,
+  undefined, () => props.pendingKey ?? props.pending);
 </script>
 
 <template>

@@ -208,7 +208,7 @@ onScopeDispose(() => {
       <div v-else>暂时无法预览这个录像。<button @click="emit('external')">使用系统播放器</button></div>
     </div>
     <div class="dock">
-      <InlineFeedback :message="error" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
+      <InlineFeedback :message="error" pending-key="save-clip" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
       <div class="info"><strong>{{ title }}</strong>
         <span v-if="editing" class="selection">选区 {{ recordingTime(start, true) }} – {{ recordingTime(end, true) }}<span class="length">时长 {{ recordingTime(end - start, true) }}</span></span>
         <span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
