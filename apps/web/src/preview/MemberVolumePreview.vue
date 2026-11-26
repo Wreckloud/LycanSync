@@ -11,7 +11,7 @@ const modes = [
 ] as const;
 const mode = ref<typeof modes[number]['id']>('ring');
 const presets = [{ value: .25, label: '轻声' }, { value: 1, label: '原声' }, { value: 1.75, label: '增强' }];
-const atEdge = ref(false), mutedMic = ref(false), sharing = ref(false);
+const atEdge = ref(false), mutedMic = ref(true), sharing = ref(true);
 const channels = computed<Channel[]>(() => sharing.value ? ['share', 'voice'] : ['voice']);
 const names = { voice: '成员语音', share: '共享声音' };
 const maxima = { voice: AUDIO_VOLUME_MAX, share: SHARE_VOLUME_MAX };
@@ -83,15 +83,23 @@ function move(channel: Channel, event: PointerEvent) {
   const distance = Math.max(1, Math.min(available, dragTravel * remaining / maxima[channel]));
   setVolume(channel, iconDrag.initial + upward * remaining / distance);
 }
-function finish(event: PointerEvent) {
+function finish(channel: Channel, event: PointerEvent) {
   if (!iconDrag || iconDrag.id !== event.pointerId) return;
   suppressClick = iconDrag.moved || event.type !== 'pointerup';
+  // 触屏拖动后浏览器可能省略下一次合成 click，轻点在抬手时只结算一次。
+  if (!suppressClick && event.pointerType === 'touch') {
+    toggleMute(channel);
+    suppressClick = true;
+  }
   iconDrag = undefined;
   const target = event.currentTarget as HTMLElement;
   if (event.pointerType === 'touch' || !target.matches(':hover, :focus-visible')) timer = setTimeout(close, 250);
 }
-function toggle(channel: Channel, event: MouseEvent) {
-  if (!suppressClick || event.detail === 0) setVolume(channel, volume.value[channel] ? 0 : lastAudible[channel]);
+function toggleMute(channel: Channel) {
+  setVolume(channel, volume.value[channel] ? 0 : lastAudible[channel]);
+}
+function click(channel: Channel, event: MouseEvent) {
+  if (!suppressClick || event.detail === 0) toggleMute(channel);
   suppressClick = false;
 }
 function wheel(channel: Channel, event: WheelEvent) {
@@ -132,7 +140,7 @@ onScopeDispose(close);
             @focus="($event.currentTarget as HTMLElement).matches(':focus-visible') && show(channel)" @blur="close"
             @keydown="arrow(channel, $event)" @keydown.esc.prevent="close"
             @pointerdown="begin(channel, $event)" @pointermove="move(channel, $event)"
-            @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @click="toggle(channel, $event)">
+            @pointerup="finish(channel, $event)" @pointercancel="finish(channel, $event)" @lostpointercapture="finish(channel, $event)" @click="click(channel, $event)">
             <template v-if="channel === 'voice'"><MicOff v-if="mutedMic || !volume.voice" :size="14" /><VoiceLevelMic v-else :level="0" :size="14" /></template>
             <template v-else><Volume2 v-if="volume.share" :size="14" /><VolumeX v-else :size="14" /></template>
             <Transition name="volume-feedback">
@@ -178,8 +186,9 @@ onScopeDispose(close);
 .volume-stage.at-edge { justify-content: flex-end; }
 .volume-stage .participant-card { width: 220px; overflow: visible; }
 .participant-media { aspect-ratio: 16/9; border-radius: 4px 4px 0 0; color: var(--muted); }
-.muted-badge { position: absolute; right: 7px; bottom: 6px; padding: 3px; color: var(--text); background: var(--panel); border-radius: 4px; }
-.volume-control { position: relative; touch-action: none; user-select: none; }
+.muted-badge { position: absolute; right: 8px; bottom: 6px; padding: 3px; color: var(--text); background: var(--panel); border-radius: 4px; }
+/* 命中区增大，外边距抵消新增尺寸，底栏仍按原先的 20px 排版。 */
+.volume-control { position: relative; width: 24px; height: 32px; margin: -6px -2px; touch-action: none; user-select: none; }
 .volume-control:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .volume-mark { position: absolute; top: 50%; left: 50%; translate: -50% -50%; pointer-events: none; color: var(--text); }
 .volume-mark.ticks { width: 48px; height: 12px; display: flex; align-items: center; justify-content: space-between; }
