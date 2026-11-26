@@ -101,7 +101,7 @@ function setSourceOpen(source: Source, open: boolean) {
   <section class="preview-content accompaniment-lab" aria-labelledby="accompaniment-title">
     <header class="preview-section-heading">
       <h2 id="accompaniment-title">分享伴奏</h2>
-      <p>指向自己的卡片，点右侧的「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
+      <p>指向自己的卡片，点麦克风左边的「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
     </header>
     <div class="card-pair">
       <section v-for="card in cards" :key="card.label" :aria-label="card.label">
@@ -111,16 +111,6 @@ function setSourceOpen(source: Source, open: boolean) {
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
             <div class="media-badges">
-              <button v-if="card.local && (accompaniment || screen === 'off')" type="button" class="media-badge own-badge"
-                :class="{ 'is-sharing': accompaniment, 'is-open': menuAnchor }" :aria-expanded="accompaniment ? undefined : !!menuAnchor" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
-                @click="accompaniment ? sharingId = '' : toggleSourceMenu($event)">
-                <template v-if="accompaniment">
-                  <img v-if="accompaniment.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
-                  <span v-else>{{ accompaniment.name }}</span>
-                  <span class="stop-label">停止伴奏</span>
-                </template>
-                <span v-else>播放伴奏</span>
-              </button>
               <span v-if="!card.local && accompaniment" class="media-badge remote-badge" role="img" tabindex="0" :aria-label="`正在分享 ${accompaniment.name} 的声音`">
                 <img v-if="accompaniment.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
                 <span v-else>{{ accompaniment.name }}</span>
@@ -134,6 +124,16 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-meta">
             <span class="participant-name"><strong>维克罗德{{ card.local ? '（你）' : '' }}</strong></span>
             <template v-if="card.local">
+              <button v-if="accompaniment || screen === 'off'" type="button" class="media-badge own-badge"
+                :class="{ 'is-sharing': accompaniment, 'is-open': menuAnchor }" :aria-expanded="accompaniment ? undefined : !!menuAnchor" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
+                @click="accompaniment ? sharingId = '' : toggleSourceMenu($event)">
+                <template v-if="accompaniment">
+                  <img v-if="accompaniment.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
+                  <span v-else>{{ accompaniment.name }}</span>
+                  <span class="stop-label">停止伴奏</span>
+                </template>
+                <span v-else>播放伴奏</span>
+              </button>
               <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !mic }"
                 :aria-label="mic ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="mic = !mic">
                 <VoiceLevelMic v-if="mic" :size="14" :level="0" /><MicOff v-else :size="14" />
@@ -205,13 +205,14 @@ function setSourceOpen(source: Source, open: boolean) {
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .media-badges { position: absolute; right: 7px; bottom: 6px; display: flex; align-items: center; gap: 4px; }
 .media-badge { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 5px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
-.media-badges:has(.own-badge:not(.is-sharing)) { top: 50%; bottom: auto; transform: translateY(-50%); }
 .own-badge { cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) ease; }
 .participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing, .own-badge.is-open { opacity: 1; pointer-events: auto; }
 .own-badge, .remote-badge { background: #10161deb; font-size: 12px; }
-.own-badge { padding-inline: 6px; }
+.own-badge { flex: none; padding-inline: 4px; }
+.participant-meta:has(.own-badge) { column-gap: 4px; }
+.own-badge:not(.is-sharing) { padding-inline: 0; background: transparent; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
-.own-badge.is-sharing { min-width: 22px; padding-inline: 3px; }
+.own-badge.is-sharing { position: absolute; right: 7px; bottom: calc(100% + 6px); min-width: 22px; padding-inline: 3px; }
 .stop-label, .remote-label { display: none; order: -1; }
 .own-badge:is(:hover,:focus-visible) .stop-label { display: inline; }
 .remote-badge, .muted-badge { min-width: 22px; padding-inline: 4px; }
