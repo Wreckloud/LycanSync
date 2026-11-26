@@ -35,6 +35,10 @@ const available = computed(() => sources.value.filter(source => source.open));
 const sharingId = ref('');
 const accompaniment = computed(() => available.value.find(source => source.id === sharingId.value));
 const silent = ref(false);
+const sharingPaused = ref(false);
+const showSpectrum = ref(false);
+const shareStatus = computed(() => sharingPaused.value ? '已暂停' : '正在分享');
+const shareAction = computed(() => sharingPaused.value ? '继续分享' : '暂停分享');
 const screen = ref<'off' | 'silent' | 'with-audio'>('off');
 const windowAudio = ref(false);
 const simulateFailure = ref(false);
@@ -84,10 +88,19 @@ function startAudio(id: string) {
   if (!source || screen.value !== 'off') return;
   if (simulateFailure.value) { error.value = '模拟分享失败，请关闭菜单后重试。'; return; }
   silent.value = false;
+  sharingPaused.value = false;
   sharingId.value = source.id;
   closeSourceMenu(true);
 }
 function stopAudio() { sharingId.value = ''; }
+function toggleSharingPaused() { sharingPaused.value = !sharingPaused.value; }
+function turnRecord(event: Event) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const icon = (event.currentTarget as HTMLElement).querySelector('.record-icon img');
+  if (icon && !icon.getAnimations().length) {
+    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 900, easing: 'ease-in-out' });
+  }
+}
 function shareScreen() {
   if (simulateFailure.value) { error.value = '模拟共享失败，当前声音保持原样。'; return; }
   screen.value = windowAudio.value ? 'with-audio' : 'silent';
@@ -113,17 +126,24 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-media">
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
+            <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
+              :class="{ 'has-sound': !sharingPaused && !accompaniment.paused && !silent }">
+              <i v-for="(height, i) in [12, 22, 18, 31, 25, 16, 28, 35, 20, 26, 18, 11]" :key="i"
+                :style="{ height: height + 'px', animationDelay: i * -0.17 + 's' }" />
+            </div>
             <Transition name="badge-fade">
               <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
                 class="media-badge audio-badge" :class="{ 'own-badge': card.local, 'is-sharing': accompaniment, 'is-open': card.local && menuAnchor }"
                 :type="card.local ? 'button' : undefined" :aria-expanded="card.local && !accompaniment ? !!menuAnchor : undefined"
-                :aria-label="card.local && accompaniment ? '正在分享，点击停止伴奏' : undefined" :title="card.local && accompaniment ? '停止伴奏' : undefined"
-                v-on="card.local ? { click: accompaniment ? stopAudio : toggleSourceMenu } : {}">
+                :aria-label="card.local && accompaniment ? shareAction : undefined"
+                @pointerenter="turnRecord" @focus="turnRecord"
+                v-on="card.local ? { click: accompaniment ? toggleSharingPaused : toggleSourceMenu } : {}">
                 <span :key="sharingId" class="audio-badge-content">
                   <span v-if="accompaniment?.icon" class="record-icon">
-                    <img class="source-icon" :class="{ 'is-playing': !accompaniment.paused && !silent }" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
+                    <img class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
                   </span>
-                  {{ accompaniment ? '正在分享' : '播放伴奏' }}
+                  <span class="badge-status">{{ accompaniment ? shareStatus : '播放伴奏' }}</span>
+                  <span v-if="card.local && accompaniment" class="badge-action">{{ shareAction }}</span>
                 </span>
               </component>
             </Transition>
@@ -167,6 +187,8 @@ function setSourceOpen(source: Source, open: boolean) {
       </fieldset>
       <label v-if="accompaniment"><input v-model="accompaniment.paused" type="checkbox" />暂停当前播放器</label>
       <label v-if="accompaniment"><input v-model="silent" type="checkbox" />模拟无声片段</label>
+      <label><input v-model="showSpectrum" type="checkbox" />预览模拟频谱背景</label>
+      <button v-if="accompaniment" type="button" @click="stopAudio">结束伴奏分享</button>
       <label><input v-model="simulateFailure" type="checkbox" />模拟分享失败</label>
       <button v-if="screen !== 'off'" type="button" @click="openScreenDialog()">调整窗口声音</button>
       <button type="button" @click="screen === 'off' ? openScreenDialog() : screen = 'off'">
@@ -208,8 +230,13 @@ function setSourceOpen(source: Source, open: boolean) {
 .audio-badge { left: 7px; background: #10161deb; font-size: 12px; white-space: nowrap; }
 .audio-badge-content { display: inline-flex; align-items: center; gap: 5px; animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
 .record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
-.record-icon img { animation: app-loading-spin 12s linear infinite paused; }
-.record-icon img.is-playing { animation-play-state: running; }
+.badge-action, .own-badge.is-sharing:is(:hover, :focus-visible) .badge-status { display: none; }
+.own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
+.spectrum-preview { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-around; overflow: hidden; opacity: .28; pointer-events: none; }
+.participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
+.spectrum-preview i { width: 3px; border-radius: 2px; background: var(--muted); transform: scaleY(.06); }
+.spectrum-preview.has-sound i { animation: spectrum-pulse 900ms ease-in-out infinite alternate; }
+@keyframes spectrum-pulse { from { transform: scaleY(.18); } to { transform: scaleY(1); } }
 .badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
