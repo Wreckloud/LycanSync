@@ -232,7 +232,7 @@ function setSourceOpen(source: Source, open: boolean) {
 .record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
 .badge-action, .own-badge.is-sharing:is(:hover, :focus-visible) .badge-status { display: none; }
 .own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
-.spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: end; gap: 2px; overflow: hidden; opacity: .36; pointer-events: none; }
+.spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: end; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
 .spectrum-preview i { background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); }
 .spectrum-preview.has-sound i { animation: spectrum-pulse 900ms ease-in-out infinite alternate; }
