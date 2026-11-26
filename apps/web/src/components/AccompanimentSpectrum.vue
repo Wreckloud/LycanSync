@@ -28,29 +28,37 @@ watchEffect(onCleanup => {
   const context = props.context;
   const analyser = context.createAnalyser();
   const responsive = props.responsive;
-  const frameMs = responsive ? 48 : 80;
+  const frameMs = 80;
   analyser.fftSize = responsive ? 2048 : 1024;
-  if (responsive) {
-    analyser.minDecibels = -72;
-    analyser.maxDecibels = -18;
-    analyser.smoothingTimeConstant = .22;
-  }
+  if (responsive) analyser.smoothingTimeConstant = .4;
   const input = context.createMediaStreamSource(new MediaStream([props.track]));
   // 只读取频谱，同一轨道的实际播放与音量继续由房间管理。
   input.connect(analyser);
-  const bins = new Uint8Array(analyser.frequencyBinCount);
+  const bins = responsive ? new Float32Array(analyser.frequencyBinCount) : new Uint8Array(analyser.frequencyBinCount);
   const bars = Array.from(element.children) as HTMLElement[];
   const edges = Array.from({ length: bars.length + 1 }, (_, i) =>
     Math.min(bins.length, Math.round(65 * (16000 / 65) ** (i / bars.length) * analyser.fftSize / context.sampleRate)));
   const peaks = bars.map(() => 4);
   const holdMs = bars.map(() => 0);
+  const levels = bars.map(() => 0);
+  let referenceDb = -Infinity;
   function draw() {
-    analyser.getByteFrequencyData(bins);
+    if (bins instanceof Float32Array) analyser.getFloatFrequencyData(bins);
+    else analyser.getByteFrequencyData(bins);
+    for (let i = 0; i < bars.length; i++) {
+      let level = responsive ? -Infinity : 0;
+      const end = Math.min(bins.length, Math.max(edges[i] + 1, edges[i + 1]));
+      for (let bin = edges[i]; bin < end; bin++) level = Math.max(level, bins[bin]);
+      levels[i] = level;
+    }
+    if (responsive) {
+      const peakDb = Math.max(...levels);
+      // 用近期响峰作为参照，让音量变化后仍看得见节拍；遇到静音就重新起算。
+      referenceDb = peakDb < -90 ? -Infinity : Math.max(peakDb, referenceDb - .4);
+    }
     bars.forEach((bar, i) => {
-      let level = 0;
-      for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
-      const strength = level / 255;
-      const height = 4 + Math.round(responsive ? strength ** 1.6 * 94 : strength * 50);
+      const relative = responsive && Number.isFinite(referenceDb) ? Math.max(0, 1 + (levels[i] - referenceDb - 3) / 50) : 0;
+      const height = 4 + Math.round(responsive ? relative ** 1.5 * 92 : levels[i] / 255 * 50);
       if (height >= peaks[i]) { peaks[i] = height; holdMs[i] = 240; }
       else if (holdMs[i] > 0) holdMs[i] -= frameMs;
       else peaks[i] = Math.max(height, peaks[i] - frameMs / 16);
