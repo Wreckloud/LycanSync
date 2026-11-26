@@ -314,6 +314,8 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     })),
     audio: snapshot.audio.map((audio) => ({ member: alias(audio.identity), source: audio.source, direction: audio.direction,
       sampleRate: numeric(audio.sampleRate), channels: numeric(audio.channels), packetsLost: numeric(audio.packetsLost),
+      uplink: audio.uplink && { intervalMs: numeric(audio.uplink.intervalMs), sentPackets: numeric(audio.uplink.sentPackets),
+        receiverReportedLossPercent: numeric(audio.uplink.receiverReportedLossPercent), feedbackAgeMs: numeric(audio.uplink.feedbackAgeMs) },
       jitterMs: numeric(audio.jitterMs), quality: audio.quality ? {
         intervalMs: numeric(audio.quality.intervalMs), receivedPackets: numeric(audio.quality.receivedPackets),
         lostPackets: numeric(audio.quality.lostPackets), lossPercent: numeric(audio.quality.lossPercent),
@@ -617,7 +619,8 @@ export function useDiagnosticReport(options: {
       // 保留窗口外的基线不可冒充窗口内区间；导出副本不影响继续采样。
       const first = exportedSamples[0];
       exportedSamples[0] = { ...first, actualIntervalMs: null, nativeInterval: null, obsRenderInterval: null,
-        audio: first.audio.map(audio => ({ ...audio, quality: null })),
+        audio: first.audio.map(audio => ({ ...audio, quality: null,
+          uplink: audio.uplink && { ...audio.uplink, intervalMs: null, sentPackets: null } })),
         streams: first.streams.map((stream) => ({ ...stream, segmentReason: 'retained-window',
           sourceFps: null, sourceIntervalMs: null, playbackFps: null, playbackIntervalMs: null, nativeInputInterval: null,
           layers: stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null, bitrateKbps: null,
@@ -649,7 +652,8 @@ export function useDiagnosticReport(options: {
       runtime: { clientVersion: packageInfo.version, desktop: Boolean(window.lycanDesktop),
         microphonePipeline: window.lycanDesktop ? 'OBS WASAPI + Sonora' : 'Chromium + browser processor' },
       measurements: {
-        audio: { scope: 'local-receiver-from-SFU', firstOrResetInterval: null,
+        audio: { receiveScope: 'local-receiver-from-SFU', firstOrResetInterval: null,
+          uplink: 'microphone-to-SFU; sentPackets over intervalMs; latest RTCP loss percent and age in ms; missing fields are unknown',
           concealment: 'synthesized-samples-not-a-perceptual-quality-score', jitterBuffer: 'interval-delay-per-emitted-sample-not-end-to-end',
           microphone: 'native-48k-mono-blocks-since-last-query; RMS-and-peak-linear; limitedSamples-final-limiter-attenuation; fullScaleSamples-input-at-or-above-one-not-proof-of-hardware-clipping',
           includesAudioContent: false },

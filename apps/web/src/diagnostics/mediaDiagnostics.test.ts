@@ -269,6 +269,35 @@ it('语音补偿区间在统计失败、静音和轨道移除后重新建立，�
   expect((await sampler.collect(room, [remote])).audio[0].quality?.intervalMs).toBeNull();
 });
 
+it('麦克风区间包数在换轨和静音后重新起算，最近回报保留年龄且不借用其他发送流', async () => {
+  const { room } = setup();
+  const out = { type: 'outbound-rtp', kind: 'audio', id: 'voice', remoteId: 'rr', timestamp: 1000, packetsSent: 50 };
+  const rr = { type: 'remote-inbound-rtp', id: 'rr', localId: 'voice', timestamp: 900, fractionLost: 0.125 };
+  const stats = new Map<string, object>([['voice', out], ['rr', rr]]);
+  const track = { mediaStreamTrack: { id: 'mic', getSettings: () => ({}) }, getRTCStatsReport: vi.fn(async () => stats) };
+  const pub = { track, isMuted: false };
+  const local = room.localParticipant;
+  local.getTrackPublication = vi.fn(source => source === Track.Source.Microphone ? pub : undefined) as typeof local.getTrackPublication;
+  const sampler = createMediaDiagnosticsSampler();
+  const sample = async () => (await sampler.collect(room, [local])).audio[0].uplink;
+  expect(await sample()).toEqual({ sentPackets: null, intervalMs: null, receiverReportedLossPercent: 12.5, feedbackAgeMs: 100 });
+  out.timestamp += 2000; out.packetsSent += 24;
+  expect(await sample()).toEqual({ sentPackets: 24, intervalMs: 2000, receiverReportedLossPercent: 12.5, feedbackAgeMs: 2100 });
+  rr.localId = 'other'; out.timestamp += 2000;
+  expect(await sample()).toEqual({ sentPackets: 0, intervalMs: 2000, receiverReportedLossPercent: null, feedbackAgeMs: null });
+  out.id = 'new'; out.timestamp += 2000;
+  expect((await sample())?.sentPackets).toBeNull();
+  out.packetsSent = 1; out.timestamp += 2000;
+  expect((await sample())?.sentPackets).toBeNull();
+  pub.isMuted = true;
+  expect(await sample()).toBeUndefined();
+  pub.isMuted = false; out.timestamp += 2000;
+  expect((await sample())?.sentPackets).toBeNull();
+  stats.set('other-stream', { ...out, id: 'another-outbound' });
+  expect(await sample()).toBeUndefined();
+  expect(track.getRTCStatsReport).toHaveBeenCalledTimes(8);
+});
+
 it('无人观看时保留真实停层状态，不因bandwidth标签推断网络故障', async () => {
   const { room, local, track } = setup();
   Object.assign(track, { sender: { getParameters: () => ({ encodings: [{ active: false }] }) } });

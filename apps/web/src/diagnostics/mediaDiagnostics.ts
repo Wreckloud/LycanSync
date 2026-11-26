@@ -1,7 +1,7 @@
 import { Track, type LocalVideoTrack, type Participant, type Room } from 'livekit-client';
 import { readTrackTarget, readVideoLayers, readVideoSourceSample, type TrackTarget, type VideoLayerStats } from '../rtc/mediaStats';
 import { readNativeVideoInput } from '../rtc/nativeScreenVideo';
-import { audioCounters, readAudioQuality } from './audioQuality';
+import { audioCounters, readAudioQuality, readMicrophoneUplink } from './audioQuality';
 import { isScreenShareViewVisible, readScreenShareViewing } from '../rtc/screenShareViewing';
 
 export interface StreamStats {
@@ -37,7 +37,7 @@ export interface MediaDiagnosticsSnapshot {
   streams: StreamStats[];
   audio: { identity: string; source: 'microphone' | 'screen_share_audio'; direction: '发送' | '接收';
     sampleRate: number | null; channels: number | null; packetsLost: number | null; jitterMs: number | null;
-    quality?: ReturnType<typeof readAudioQuality> | null }[];
+    quality?: ReturnType<typeof readAudioQuality> | null; uplink?: ReturnType<typeof readMicrophoneUplink> }[];
   process: DesktopProcessMetrics | null;
   native: NativeCaptureDiagnostics | null;
   nativeInterval: { elapsedMs: number; framesReceived: number; framesProcessed: number;
@@ -198,19 +198,31 @@ export function createMediaDiagnosticsSampler() {
             let packetsLost: number | null = null;
             let jitterMs: number | null = null;
             let quality: ReturnType<typeof readAudioQuality> | null = null;
+            let uplink: ReturnType<typeof readMicrophoneUplink> | undefined;
+            const senders: RTCOutboundRtpStreamStats[] = [];
             report?.forEach((stat) => {
-              if (stat.type !== 'inbound-rtp' || stat.kind !== 'audio') return;
+              if (stat.kind !== 'audio') return;
               if (subscription.muted || subscription.enabled === false || subscription.subscribed === false) return;
+              if (local && source === Track.Source.Microphone && stat.type === 'outbound-rtp') {
+                if (stat.active !== false) senders.push(stat);
+                return;
+              }
+              if (stat.type !== 'inbound-rtp') return;
               const counters = audioCounters(stat);
               quality = readAudioQuality(counters, previousAudio.get(track.mediaStreamTrack.id));
               previousAudio.set(track.mediaStreamTrack.id, counters);
               if (typeof stat.packetsLost === 'number') packetsLost = stat.packetsLost;
               if (typeof stat.jitter === 'number') jitterMs = Math.round(stat.jitter * 1000);
             });
+            // 重发布时若仍有两个发送流，不能任选其一作为麦克风的上行。
+            if (report && senders.length === 1) {
+              uplink = readMicrophoneUplink(report, senders[0], previousAudio.get(trackId));
+              previousAudio.set(trackId, audioCounters(senders[0]));
+            }
             snapshot.audio.push({ identity: participant.identity, source: source === Track.Source.Microphone
               ? 'microphone' : 'screen_share_audio', direction, sampleRate: settings.sampleRate ?? null,
-              channels: settings.channelCount ?? null, packetsLost, jitterMs, quality });
-            if (!quality) previousAudio.delete(track.mediaStreamTrack.id);
+              channels: settings.channelCount ?? null, packetsLost, jitterMs, quality, uplink });
+            if (!quality && !uplink) previousAudio.delete(trackId);
           }
         } catch {
           previousAudio.delete(trackId);

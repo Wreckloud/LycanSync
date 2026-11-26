@@ -413,6 +413,13 @@ it('设置读取失败保守停用；写入失败仍允许本次关闭并说明�
 });
 
 it('自动记录超过三十分钟持续滚动且不超过900份，导出窗口首样本不混入窗外基线', async () => {
+  const uplink = { sentPackets: 72, intervalMs: 2000, receiverReportedLossPercent: 0, feedbackAgeMs: 230 };
+  collect.mockImplementation(async () => {
+    const next = snapshot();
+    next.audio.push({ identity: 'local', source: 'microphone', direction: '发送', sampleRate: 48000, channels: 1,
+      packetsLost: null, jitterMs: null, uplink });
+    return next;
+  });
   const { report, exportDiagnosticReport } = setup(true);
   await vi.advanceTimersByTimeAsync(35 * 60_000);
   expect(report.recording.value).toBe(true);
@@ -423,6 +430,8 @@ it('自动记录超过三十分钟持续滚动且不超过900份，导出窗口�
   expect(result.samples).toHaveLength(900);
   expect(result.samples[0]).toMatchObject({ elapsedMs: 0, actualIntervalMs: null, nativeInterval: null, obsRenderInterval: null });
   expect(result.samples[0].streams[0]).toMatchObject({ segmentReason: 'retained-window', sourceFps: null, layers: [{ fps: null, bitrateKbps: null }] });
+  expect(result.samples[0].audio[0].uplink).toEqual({ ...uplink, intervalMs: null, sentPackets: null });
+  expect(result.samples[1].audio[0].uplink).toEqual(uplink);
   expect(result.samples.at(-1).streams[0].segmentReason).toBe('continuation');
   expect(result.samples.at(-1).elapsedMs).toBeLessThanOrEqual(30 * 60_000);
   expect(result.startedAt).toBe(result.samples[0].time);

@@ -104,6 +104,19 @@ export function readTransportFeedback(report: RTCStatsReport, transportId: strin
   return { candidatePairId, candidatePairResponses, milliseconds };
 }
 
+type ReceiverReport = { timestamp?: number; roundTripTime?: number; fractionLost?: number };
+
+/** RTCP 回报只描述关联的发送流。部分浏览器仅提供回报到本地流的反向关联。 */
+export function findReceiverReport(report: RTCStatsReport, outbound: { id: string; remoteId?: string }): ReceiverReport | undefined {
+  const linked = outbound.remoteId && report.get(outbound.remoteId);
+  if (linked?.type === 'remote-inbound-rtp' && (!linked.localId || linked.localId === outbound.id)) return linked;
+  let remote: ReceiverReport | undefined;
+  report.forEach(candidate => {
+    if (candidate.type === 'remote-inbound-rtp' && candidate.localId === outbound.id) remote = candidate;
+  });
+  return remote;
+}
+
 /** 从一条视频轨道的 WebRTC 统计中读取实际编解码结果，而非发布时的目标配置。 */
 export function readVideoLayers(
   report: RTCStatsReport,
@@ -122,15 +135,7 @@ export function readVideoLayers(
     const decodeTime = direction === 'inbound-rtp' ? finite(stat.totalDecodeTime) : null;
     const sampleKey = `${trackId}:${stat.id}`;
     const last = previous.get(sampleKey);
-    let remote: { timestamp?: number; roundTripTime?: number; fractionLost?: number } | undefined;
-    if (direction === 'outbound-rtp') {
-      // 只关联当前编码层的接收报告，不能拿同一房间其他轨道的网络数据补缺。
-      report.forEach((candidate) => {
-        if (candidate.type === 'remote-inbound-rtp' && (candidate.localId === stat.id || candidate.id === stat.remoteId)) {
-          remote = candidate;
-        }
-      });
-    }
+    const remote = direction === 'outbound-rtp' ? findReceiverReport(report, stat) : undefined;
     const feedbackTimestamp = finite(remote?.timestamp);
     const hasNewFeedback = feedbackTimestamp !== null && (last?.feedbackTimestamp === null
       || last?.feedbackTimestamp === undefined || feedbackTimestamp > last.feedbackTimestamp);
