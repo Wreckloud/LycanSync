@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
+import { Disc3, HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
 import AccompanimentSourceMenu from './AccompanimentSourceMenu.vue';
 import DialogTransition from '../components/DialogTransition.vue';
 import MemberVolumeButton from '../components/MemberVolumeButton.vue';
@@ -35,10 +35,7 @@ const available = computed(() => sources.value.filter(source => source.open));
 const sharingId = ref('');
 const accompaniment = computed(() => available.value.find(source => source.id === sharingId.value));
 const silent = ref(false);
-const sharingPaused = ref(false);
 const showSpectrum = ref(false);
-const shareStatus = computed(() => sharingPaused.value ? '已暂停' : '正在分享');
-const shareAction = computed(() => sharingPaused.value ? '继续分享' : '暂停分享');
 const screen = ref<'off' | 'silent' | 'with-audio'>('off');
 const windowAudio = ref(false);
 const simulateFailure = ref(false);
@@ -88,17 +85,15 @@ function startAudio(id: string) {
   if (!source || screen.value !== 'off') return;
   if (simulateFailure.value) { error.value = '模拟分享失败，请关闭菜单后重试。'; return; }
   silent.value = false;
-  sharingPaused.value = false;
   sharingId.value = source.id;
   closeSourceMenu(true);
 }
 function stopAudio() { sharingId.value = ''; }
-function toggleSharingPaused() { sharingPaused.value = !sharingPaused.value; }
 function turnRecord(event: Event) {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const icon = (event.currentTarget as HTMLElement).querySelector('.record-icon img');
+  if (!accompaniment.value || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const icon = (event.currentTarget as HTMLElement).querySelector('.record-icon');
   if (icon && !icon.getAnimations().length) {
-    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 900, easing: 'ease-in-out' });
+    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 3600, easing: 'linear' });
   }
 }
 function shareScreen() {
@@ -126,24 +121,27 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-media">
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
-            <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
-              :class="{ 'has-sound': !sharingPaused && !accompaniment.paused && !silent }">
-              <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
-                :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
-            </div>
+            <Transition name="badge-fade">
+              <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
+                :class="{ 'has-sound': !accompaniment.paused && !silent }">
+                <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
+                  :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
+              </div>
+            </Transition>
             <Transition name="badge-fade">
               <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
                 class="media-badge audio-badge" :class="{ 'own-badge': card.local, 'is-sharing': accompaniment, 'is-open': card.local && menuAnchor }"
                 :type="card.local ? 'button' : undefined" :aria-expanded="card.local && !accompaniment ? !!menuAnchor : undefined"
-                :aria-label="card.local && accompaniment ? shareAction : undefined"
+                :aria-label="card.local && accompaniment ? '暂停分享' : undefined"
                 @pointerenter="turnRecord" @focus="turnRecord"
-                v-on="card.local ? { click: accompaniment ? toggleSharingPaused : toggleSourceMenu } : {}">
+                v-on="card.local ? { click: accompaniment ? stopAudio : toggleSourceMenu } : {}">
                 <span :key="sharingId" class="audio-badge-content">
-                  <span v-if="accompaniment?.icon" class="record-icon">
-                    <img class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
+                  <span class="record-icon" aria-hidden="true">
+                    <img v-if="accompaniment?.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
+                    <Disc3 v-else :size="16" />
                   </span>
-                  <span class="badge-status">{{ accompaniment ? shareStatus : '播放伴奏' }}</span>
-                  <span v-if="card.local && accompaniment" class="badge-action">{{ shareAction }}</span>
+                  <span class="badge-status">{{ accompaniment ? '正在分享' : '播放伴奏' }}</span>
+                  <span v-if="card.local && accompaniment" class="badge-action">暂停分享</span>
                 </span>
               </component>
             </Transition>
@@ -188,7 +186,6 @@ function setSourceOpen(source: Source, open: boolean) {
       <label v-if="accompaniment"><input v-model="accompaniment.paused" type="checkbox" />暂停当前播放器</label>
       <label v-if="accompaniment"><input v-model="silent" type="checkbox" />模拟无声片段</label>
       <label><input v-model="showSpectrum" type="checkbox" />预览模拟频谱背景</label>
-      <button v-if="accompaniment" type="button" @click="stopAudio">结束伴奏分享</button>
       <label><input v-model="simulateFailure" type="checkbox" />模拟分享失败</label>
       <button v-if="screen !== 'off'" type="button" @click="openScreenDialog()">调整窗口声音</button>
       <button type="button" @click="screen === 'off' ? openScreenDialog() : screen = 'off'">
@@ -230,11 +227,12 @@ function setSourceOpen(source: Source, open: boolean) {
 .audio-badge { left: 7px; background: #10161deb; font-size: 12px; white-space: nowrap; }
 .audio-badge-content { display: inline-flex; align-items: center; gap: 5px; animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
 .record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
+.record-icon > svg { color: var(--muted); }
 .badge-action, .own-badge.is-sharing:is(:hover, :focus-visible) .badge-status { display: none; }
 .own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
-.spectrum-preview i { position: relative; height: 4px; transition: height 550ms ease-in 240ms; }
+.spectrum-preview i { position: relative; height: 4px; transition: height 550ms ease-in 320ms; }
 .spectrum-preview.has-sound i { height: var(--band-height); transition: none; }
 .spectrum-preview i::before, .spectrum-preview i::after { content: ''; position: absolute; inset-inline: 0; }
 .spectrum-preview i::before { bottom: 0; height: 100%; max-height: 4px; background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); animation: spectrum-pulse 1.8s ease-in-out var(--phase) infinite paused; }
@@ -242,7 +240,7 @@ function setSourceOpen(source: Source, open: boolean) {
 .spectrum-preview i::after { top: calc(100% - 4px); height: 2px; background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
 .spectrum-preview.has-sound i::before, .spectrum-preview.has-sound i::after { animation-play-state: running; }
 @keyframes spectrum-pulse { 0%, 85%, 100% { clip-path: inset(calc(100% - 4px) 0 0); } 50% { clip-path: inset(0); } }
-@keyframes spectrum-peak { 0%, 100% { top: calc(100% - 4px); } 50%, 64% { top: 0; } }
+@keyframes spectrum-peak { 0%, 100% { top: calc(100% - 4px); } 50%, 68% { top: 0; } }
 .badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
