@@ -725,6 +725,17 @@ const localMicrophoneLevel = computed(() => {
 const localInputLevel = computed(() => normalizeVoiceLevel(localMicrophoneLevel.value));
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
+const remotePreviewsPaused = ref(false);
+// 短暂连上就恢复缩略图，会让多路视频重新争用刚恢复的语音链路。
+const PREVIEW_RECOVERY_MS = 30_000;
+watch([() => rtc.room, () => rtc.status], ([room, status], [previousRoom], onCleanup) => {
+  if (!room || room !== previousRoom || status === 'idle') remotePreviewsPaused.value = false;
+  if (room && status === 'reconnecting') remotePreviewsPaused.value = true;
+  if (room && status === 'connected' && remotePreviewsPaused.value) {
+    const timer = setTimeout(() => { remotePreviewsPaused.value = false; }, PREVIEW_RECOVERY_MS);
+    onCleanup(() => clearTimeout(timer));
+  }
+}, { flush: 'sync' });
 const microphoneBusy = computed(() => rtc.busySources.includes(Track.Source.Microphone));
 const preparingMicrophone = useLoadingHint(() => connected.value && microphoneBusy.value
   && rtc.microphoneIntent && !rtc.microphoneEnabled);
@@ -1374,6 +1385,7 @@ function participantListening(participant: Participant) {
           :focused="focusedIdentity === participant.identity" :watching-elsewhere="watchingElsewhere"
           :view-active="visible" :snapshot="diagnosticReport.latest.value"
           :preview-mounted="previewsMounted"
+          :pause-remote-preview="remotePreviewsPaused && participant !== localParticipant"
           :revision="rtc.revision" :speaker-revision="rtc.speakerRevision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"

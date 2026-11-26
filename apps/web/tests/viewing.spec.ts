@@ -364,6 +364,34 @@ test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选�
   await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
 });
 
+test('弱网重连后持续稳定才恢复缩略图，仍能主动观看', async ({ page }) => {
+  await sharing(page, ['A', 'B']);
+  await page.evaluate(() =>
+    (window as unknown as { __viewingTest: { addShareAudio(ids: string[]): void } }).__viewingTest.addShareAudio(['A', 'B']));
+  const volumes = () => page.evaluate(() =>
+    (window as unknown as { __viewingTest: { shareVolumes(): Record<string, number> } }).__viewingTest.shareVolumes());
+  const visibility = () => page.evaluate(() =>
+    (window as unknown as { __viewingTest: { visibility(): Record<string, boolean> } }).__viewingTest.visibility());
+  const connection = (status: string) => page.evaluate(value =>
+    (window as unknown as { __viewingTest: { connection(value: string): void } }).__viewingTest.connection(value), status);
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: 0.1 });
+  await page.clock.install();
+  await connection('reconnecting');
+  await expect.poll(visibility).toMatchObject({ A: false, B: false });
+  await connection('connected');
+  await page.clock.fastForward(20_000);
+  await connection('reconnecting');
+  await connection('connected');
+  await page.clock.fastForward(15_000);
+  await expect.poll(visibility).toMatchObject({ A: false, B: false });
+  await expect.poll(volumes).toEqual({ A: 0.1, B: 0.1 });
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: false });
+  await page.clock.fastForward(16_000);
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+});
+
 test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复低层', async ({ page }) => {
   await sharing(page, ['A', 'B']);
   const quality = () => page.evaluate(() =>
