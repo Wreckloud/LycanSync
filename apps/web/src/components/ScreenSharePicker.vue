@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
   loading: boolean; error: string; notice: string;
   customQuality?: CustomScreenShareQuality;
   followGameAvailable?: boolean;
+  accompaniment?: string;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: []; previewLoaded: [sourceId: string];
@@ -51,6 +52,8 @@ const feedbackStatus = computed(() => {
   if (!sources.value.length) return '没有可共享的窗口或屏幕，请切换分类，或打开要分享的窗口。';
   // 勾选前就说明采集范围，不能让系统混音看起来只包含所选应用。
   if (props.audioMode === 'systemMix') return '将共享全部电脑声音，包括 lycanclaw 的声音，可能产生回声。';
+  if (props.accompaniment && props.audioMode !== 'unavailable') return props.shareAudio
+    ? '共享成功后，窗口声音将替换当前伴奏。' : '将继续分享 ' + props.accompaniment + ' 的伴奏。';
   return props.audioMode === 'unavailable' ? '当前系统仅支持共享画面。' : '';
 });
 const backdropEvents = useBackdropDismiss(() => emit('close'));

@@ -9,6 +9,7 @@ import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   MousePointer2, Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
+import ParticipantAccompaniment from './components/ParticipantAccompaniment.vue';
 import ParticipantCard from './components/ParticipantCard.vue';
 import CallControls from './components/CallControls.vue';
 import PersonalStatusCard from './components/PersonalStatusCard.vue';
@@ -1338,7 +1339,7 @@ function participantListening(participant: Participant) {
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
-      :follow-game-available="captureFollowGameAvailable"
+      :accompaniment="rtc.applicationAudioSource?.name" :follow-game-available="captureFollowGameAvailable"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails" @preview-loaded="reportRenderedPreviews"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     </DialogTransition>
@@ -1373,7 +1374,15 @@ function participantListening(participant: Participant) {
           @change-share-volume="updateSharedVolume(participant.identity, $event)" @change-voice-volume="updateParticipantVolume(participant.identity, $event)"
           @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="viewerNotice = ''; select(participant.identity)"
           @toggle-audio="toggleParticipantAudio(participant.identity)"
-          @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+          @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening">
+          <template #accompaniment="{ screen }">
+            <ParticipantAccompaniment :local="participant === localParticipant" :screen="screen" :visible="visible"
+              :publication="participant.getTrackPublication(Track.Source.ScreenShareAudio)" :revision="rtc.revision"
+              :source="participant === localParticipant ? rtc.applicationAudioSource : null" :context="rtc.playbackContext"
+              :busy="rtc.applicationAudioBusy" :start="rtc.startApplicationAudio" :stop="rtc.stopApplicationAudio"
+              @notice="viewerNotice = $event" />
+          </template>
+        </ParticipantCard>
         </div>
       </template>
     </ScreenShareWindows>

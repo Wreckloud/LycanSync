@@ -276,6 +276,7 @@ onBeforeUnmount(() => {
         <img v-if="avatar" :src="avatar" alt="" />
         <template v-else>{{ media.name.slice(0, 1) }}</template>
       </div>
+      <slot name="accompaniment" :screen="media.sharing" />
       <span v-if="isLocal && recordingElapsed" class="recording-indicator" :aria-label="'正在录制 ' + recordingElapsed" title="正在录制">
         <Circle :size="10" fill="currentColor" aria-hidden="true" /><time>{{ recordingElapsed }}</time>
       </span>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Disc3, HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
-import AccompanimentSourceMenu from './AccompanimentSourceMenu.vue';
+import { HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
+import AccompanimentSourceMenu from '../components/AccompanimentSourceMenu.vue';
+import AccompanimentBadge from '../components/AccompanimentBadge.vue';
 import DialogTransition from '../components/DialogTransition.vue';
 import MemberVolumeButton from '../components/MemberVolumeButton.vue';
 import VoiceLevelMic from '../components/VoiceLevelMic.vue';
@@ -89,13 +90,6 @@ function startAudio(id: string) {
   closeSourceMenu(true);
 }
 function stopAudio() { sharingId.value = ''; }
-function turnRecord(event: Event) {
-  if (!accompaniment.value || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const icon = (event.currentTarget as HTMLElement).querySelector('.record-icon');
-  if (icon && !icon.getAnimations().length) {
-    icon.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: 3600, easing: 'linear' });
-  }
-}
 function shareScreen() {
   if (simulateFailure.value) { error.value = '模拟共享失败，当前声音保持原样。'; return; }
   screen.value = windowAudio.value ? 'with-audio' : 'silent';
@@ -128,23 +122,9 @@ function setSourceOpen(source: Source, open: boolean) {
                   :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
               </div>
             </Transition>
-            <Transition name="badge-fade">
-              <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
-                class="media-badge audio-badge" :class="{ 'own-badge': card.local, 'is-sharing': accompaniment, 'is-open': card.local && menuAnchor }"
-                :type="card.local ? 'button' : undefined" :aria-expanded="card.local && !accompaniment ? !!menuAnchor : undefined"
-                :aria-label="card.local && accompaniment ? '暂停分享' : undefined"
-                @pointerenter="turnRecord" @focus="turnRecord"
-                v-on="card.local ? { click: accompaniment ? stopAudio : toggleSourceMenu } : {}">
-                <span :key="sharingId" class="audio-badge-content">
-                  <span class="record-icon" aria-hidden="true">
-                    <img v-if="accompaniment?.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
-                    <Disc3 v-else :size="16" />
-                  </span>
-                  <span class="badge-status">{{ accompaniment ? '正在分享' : '播放伴奏' }}</span>
-                  <span v-if="card.local && accompaniment" class="badge-action">暂停分享</span>
-                </span>
-              </component>
-            </Transition>
+            <AccompanimentBadge v-if="accompaniment || (card.local && screen === 'off')" :local="card.local"
+              :sharing="accompaniment?.id" :icon="accompaniment?.icon" :open="card.local && !!menuAnchor"
+              @activate="accompaniment ? stopAudio() : toggleSourceMenu($event)" />
             <span v-if="!card.local && (!listening || !mic)" class="media-badge muted-badge" role="img" :aria-label="!listening ? '已停止收听' : '麦克风已关闭'">
               <HeadphoneOff v-if="!listening" :size="13" /><MicOff v-else :size="13" />
             </span>
@@ -224,12 +204,6 @@ function setSourceOpen(source: Source, open: boolean) {
 .participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .media-badge { position: absolute; bottom: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
-.audio-badge { left: 7px; background: #10161deb; font-size: 12px; white-space: nowrap; }
-.audio-badge-content { display: inline-flex; align-items: center; gap: 5px; animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
-.record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
-.record-icon > svg { color: var(--muted); }
-.badge-action, .own-badge.is-sharing:is(:hover, :focus-visible) .badge-status { display: none; }
-.own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
 .spectrum-preview i { position: relative; height: 4px; transition: height 550ms ease-in 320ms; }
@@ -244,8 +218,6 @@ function setSourceOpen(source: Source, open: boolean) {
 .badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
-.own-badge { cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) var(--motion-ease); }
-.participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing, .own-badge.is-open { opacity: 1; pointer-events: auto; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
 .screen-preview { display: grid; justify-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .scenario-controls { padding-top: 12px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 13px; }
@@ -257,7 +229,5 @@ function setSourceOpen(source: Source, open: boolean) {
 .screen-options { display: grid; gap: 8px; margin: 18px 0; }
 .screen-options p { margin: 0; color: var(--muted); }
 .picker-error { color: var(--danger); }
-@media (hover: none), (pointer: coarse) { .own-badge { opacity: 1; pointer-events: auto; } }
 @media (max-width: 480px) { .card-pair { grid-template-columns: minmax(0, 222px); } }
-@media (prefers-reduced-motion: reduce) { .own-badge { transition: none; } }
 </style>
