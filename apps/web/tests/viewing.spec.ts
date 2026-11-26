@@ -938,7 +938,7 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   expect(result.stopReason).toBe('roomChanged');
   expect(result.samples.length).toBeGreaterThan(1);
   expect(result.notes).toBe('合成界面回归');
-  expect(result.schemaVersion).toBe(14);
+  expect(result.schemaVersion).toBe(15);
   expect(result.samples.some((sample: { streams: { viewing: { inactiveViews: number } | null }[] }) =>
     sample.streams.some(stream => stream.viewing && stream.viewing.inactiveViews > 0))).toBe(true);
   expect(result.problemMarkers).toEqual([{ time: expect.any(String), category: 'video-stutter', recording: true }]);

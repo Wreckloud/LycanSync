@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { mkdir, mkdtemp, readFile, rename, rm, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { readFileSync } = require('node:fs');
 const { runInNewContext } = require('node:vm');
 
@@ -162,7 +162,7 @@ function ipcFixture() {
     diagnosticReportsGeneration: 0, diagnosticStartedAt: Date.parse('2026-10-26T00:00:00Z'),
     saveDirectories: { exportDirectory: async () => resolve('/private', 'exports') },
     gzipReport: require('node:util').promisify(require('node:zlib').gzip),
-    trustedSender: event => event.trusted, parseDiagnosticReport,
+    trustedSender: event => event.trusted, parseDiagnosticReport, compactSavedSamples,
     writeMediaDiagnostic: Object.assign(async entry => failures.push(entry), { flush: async () => {} }),
     Date, JSON, Error, resolve, mainWindow: {},
     process: { platform: 'win32', arch: 'x64', versions: { electron: 'current-electron' } }, osRelease: () => 'current-os',
@@ -193,6 +193,29 @@ test('主动上传将同一份完整报告保存到默认目录，无需选择�
   assert.equal(result.filePath, f.writes[0].path);
   assert.deepEqual(f.writes[0].report, body);
   assert.equal(f.dialogOptions.length, 0);
+});
+
+test('合并导出可逐条还原重叠窗口和旧版快照，同一时刻不同内容分别保留', async () => {
+  const f = ipcFixture();
+  const first = { time: '2026-10-26T00:00:01Z', audio: [{ packetsLost: 4 }] };
+  const second = { time: '2026-10-26T00:00:03Z', audio: [] };
+  const changed = { ...first, audio: [{ packetsLost: null }] };
+  const top = { ...savedReport('new'), schemaVersion: 15, samples: [second] };
+  const reports = { current: { ...savedReport('new'), samples: [first, second] },
+    previous: { ...savedReport('old'), samples: [changed, second] },
+    lastScreenUsage: { ...savedReport('old'), samples: [changed, first, second], persistence: { retainedScreenUsage: true } } };
+  f.state.savedDiagnosticReports.all = async () => ({ reports, unavailable: [] });
+  const result = await f.handlers.get('diagnostics:prepare-upload')({ trusted: true }, JSON.stringify(top));
+  const bundle = JSON.parse(require('node:zlib').gunzipSync(result.gzip));
+  assert.deepEqual(bundle, f.writes[0].report);
+  assert.deepEqual(bundle.savedReports.previous.samples[0], changed);
+  assert.deepEqual(bundle.savedReports.lastScreenUsage.samples, [
+    { $ref: '#/savedReports/previous/samples/0' }, { $ref: '#/savedReports/current/samples/0' }, { $ref: '#/samples/0' }]);
+  for (const [key, saved] of Object.entries(bundle.savedReports)) {
+    const samples = saved.samples.map(sample => sample.$ref
+      ? sample.$ref.slice(2).split('/').reduce((value, field) => value[field], bundle) : sample);
+    assert.deepEqual({ ...saved, samples }, reports[key]);
+  }
 });
 
 test('本地副本无法写入时仍能上传，并明确返回保存结果', async () => {
@@ -285,15 +308,15 @@ test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘�
 });
 
 
-test('手动导出与自动保存共用9至14版校验，非法报告不打开保存框', async () => {
+test('手动导出与自动保存共用9至15版校验，非法报告不打开保存框', async () => {
   const f = ipcFixture();
   const exportReport = f.handlers.get('diagnostics:export');
-  for (const schemaVersion of [9, 10, 11, 12, 13, 14]) {
+  for (const schemaVersion of [9, 10, 11, 12, 13, 14, 15]) {
     await exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('current')), schemaVersion }));
     assert.equal(f.writes.at(-1).report.schemaVersion, schemaVersion);
   }
   const opened = f.dialogOptions.length;
-  for (const schemaVersion of [8, 15]) {
+  for (const schemaVersion of [8, 16]) {
     await assert.rejects(exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('bad')), schemaVersion })), /无效/);
   }
   assert.equal(f.dialogOptions.length, opened);

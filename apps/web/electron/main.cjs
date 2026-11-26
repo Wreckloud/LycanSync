@@ -25,7 +25,7 @@ const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
-const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { createWindowThumbnailLoader } = require('./native-window-thumbnails.cjs');
@@ -1079,7 +1079,8 @@ async function prepareDiagnosticReport(event, text, upload) {
     report.events = events;
     report.eventWindow = { startedAt: new Date(eventStartedAt).toISOString(), endedAt: new Date(eventEndedAt).toISOString() };
     report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至导出最近200项；不含异常正文';
-    report.savedReports = retained.reports;
+    report.savedReports = report.schemaVersion >= 15 ? await compactSavedSamples(report, retained.reports) : retained.reports;
+    if (report.schemaVersion >= 15) report.savedSampleReferences = '历史 samples 中的 $ref 是本文件内的 JSON Pointer，指向完整采样。';
     report.unavailableReports = retained.unavailable;
     const json = JSON.stringify(report);
     let filePath;

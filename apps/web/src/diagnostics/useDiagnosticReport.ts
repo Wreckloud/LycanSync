@@ -628,7 +628,7 @@ export function useDiagnosticReport(options: {
     }
     const reportStart = discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString();
     const reportEnd = endedAt ?? new Date().toISOString();
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 14,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 15,
       startedAt: reportStart, endedAt: reportEnd,
       lastRoomDisconnect: lastRoomDisconnect && lastRoomDisconnect.time >= reportStart
         && Date.parse(reportEnd) - Date.parse(lastRoomDisconnect.time) <= MAX_DURATION_MS ? lastRoomDisconnect : null,

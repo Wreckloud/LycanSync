@@ -1,5 +1,7 @@
 const { mkdir, open, rename, unlink, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
+const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
+const { isDeepStrictEqual } = require('node:util');
 
 const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
@@ -9,7 +11,7 @@ function parseDiagnosticReport(text) {
 }
 
 function validateDiagnosticReport(report) {
-  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12, 13, 14].includes(report.schemaVersion) || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12, 13, 14, 15].includes(report.schemaVersion) || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');
@@ -26,6 +28,34 @@ function serializeDiagnosticReport(report) {
   const text = JSON.stringify(report);
   if (Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
   return text;
+}
+
+// 只在合并导出时引用相同采样。各磁盘快照始终独立，历史标记、版本和事件仍归各自报告。
+async function compactSavedSamples(report, savedReports) {
+  const byTime = new Map();
+  function remember(sample, pointer) {
+    if (typeof sample?.time !== 'string') return;
+    const entries = byTime.get(sample.time) ?? [];
+    entries.push({ sample, pointer });
+    byTime.set(sample.time, entries);
+  }
+  report.samples.forEach((sample, index) => remember(sample, '#/samples/' + index));
+  const compacted = {};
+  for (const [source, saved] of Object.entries(savedReports)) {
+    const samples = [];
+    for (const [index, sample] of saved.samples.entries()) {
+      if (index && index % 32 === 0) await yieldToMainLoop();
+      const match = byTime.get(sample?.time)?.find(entry => isDeepStrictEqual(entry.sample, sample));
+      if (match) {
+        samples.push({ $ref: match.pointer });
+      } else {
+        samples.push(sample);
+        remember(sample, '#/savedReports/' + source + '/samples/' + index);
+      }
+    }
+    compacted[source] = { ...saved, samples };
+  }
+  return compacted;
 }
 
 function hasScreenMedia(sample) {
@@ -157,4 +187,4 @@ function createDiagnosticReportStore(directory) {
   };
 }
 
-module.exports = { createDiagnosticReportStore, parseDiagnosticReport };
+module.exports = { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport };
