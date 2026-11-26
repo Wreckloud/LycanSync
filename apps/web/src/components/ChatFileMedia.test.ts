@@ -1,11 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
-import { compile } from '@vue/compiler-dom';
-import * as Vue from 'vue';
 import ts from 'typescript';
 import { computed, effectScope, onScopeDispose, ref } from 'vue';
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { ApiRequestError } from '../auth/authApi';
 import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 
 const { descriptor } = parse(readFileSync(new URL('./ChatFileMedia.vue', import.meta.url), 'utf8'));
@@ -13,6 +12,7 @@ const script = descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('media.ts', script, ts.ScriptTarget.Latest, true);
 const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
+afterEach(() => vi.useRealTimers());
 function setup(name = 'test.mp4', cached: Blob | null = null, uploading = false) {
   const scope = effectScope();
   let mount!: () => void;
@@ -21,22 +21,31 @@ function setup(name = 'test.mp4', cached: Blob | null = null, uploading = false)
   const requestStarted = new Promise<void>(done => { started = done; });
   const pending = () => new Promise<Blob | null>(done => { resolve = done; started(); });
   const fetchFilePreview = vi.fn(pending);
-  const fetchChatThumbnail = vi.fn(pending);
+  const fetchChatThumbnail = vi.fn<typeof import('../chat/chatApi').fetchChatThumbnail>(pending);
   const cache = { revision: 0, read: vi.fn(async () => cached), write: vi.fn(), discard: vi.fn() };
   const createObjectURL = vi.fn((_blob: Blob) => 'blob:media');
   const revokeObjectURL = vi.fn();
   const callbacks: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+  const margins: string[] = [];
+  const document = Object.assign(new EventTarget(), { hidden: false });
   const disconnect = vi.fn();
-  const media = scope.run(() => runInNewContext(`${compiled}\n({frame,source,failed,loadingFailed,load,release,decodeFailed})`, {
+  const media = scope.run(() => runInNewContext(`${compiled}\n({frame,source,coverState,load,release,decodeFailed})`, {
     ref, computed, onScopeDispose, onMounted: (callback: () => void) => { mount = callback; },
-    inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob, setTimeout, clearTimeout,
+    inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob, setTimeout, clearTimeout, ApiRequestError, document,
     defineProps: () => ({ groupId: 'group', pending: uploading, attachment: { id: 'file', fileName: name, contentType: 'application/octet-stream', byteSize: 4 } }),
     defineEmits: () => vi.fn(), chatMediaFormat, chatMediaFrameStyle, fetchFilePreview, fetchChatThumbnail, AbortController,
     URL: { createObjectURL, revokeObjectURL },
-    IntersectionObserver: class { constructor(callback: typeof callbacks[number]) { callbacks.push(callback); } observe() {} disconnect = disconnect; },
-  })) as { frame: {value: unknown}; source: {value: string}; failed: {value: boolean}; loadingFailed: {value: boolean}; load(): Promise<void>; release(): void; decodeFailed(): void };
+    IntersectionObserver: class {
+      constructor(callback: typeof callbacks[number], options: IntersectionObserverInit) {
+        callbacks.push(callback); margins.push(options.rootMargin!);
+      }
+      observe() {} disconnect = disconnect;
+    },
+  })) as { frame: {value: unknown}; source: {value: string}; coverState: {value: string}; load(): Promise<void>; release(): void; decodeFailed(): void };
   media.frame.value = { closest: () => null }; mount();
-  return { scope, media, cache, requestStarted, callbacks, fetchFilePreview, fetchChatThumbnail, createObjectURL, revokeObjectURL, resolve: (blob: Blob | null) => resolve(blob), disconnect };
+  const intersect = (visible: boolean) => callbacks.at(-1)!([{ isIntersecting: visible }]);
+  const hide = (hidden: boolean) => { document.hidden = hidden; document.dispatchEvent(new Event('visibilitychange')); };
+  return { scope, media, cache, requestStarted, callbacks, margins, intersect, hide, fetchFilePreview, fetchChatThumbnail, createObjectURL, revokeObjectURL, resolve: (blob: Blob | null) => resolve(blob), disconnect };
 }
 it('离开区域取消读取，迟到内容不能创建 URL 或写入缓存', async () => {
   const f = setup();
@@ -90,7 +99,7 @@ it('上传封面暂缺时补查一次，离屏期间取消补查', async () => {
     expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
     f.resolve(null);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(f.media.failed.value).toBe(true);
+    expect(f.media.coverState.value).toBe('unavailable');
     expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
   } finally { f.scope.stop(); vi.useRealTimers(); }
 });
@@ -111,7 +120,7 @@ it('上传封面稍后就绪时，原位显示补查结果', async () => {
 it('没有封面时保留文件入口，不转而自动下载原视频', async () => {
   const f = setup('test.mp4');
   const loading = f.media.load(); await f.requestStarted; f.resolve(null); await loading;
-  expect(f.media.failed.value).toBe(true);
+  expect(f.media.coverState.value).toBe('unavailable');
   expect(f.fetchFilePreview).not.toHaveBeenCalled();
   expect(f.createObjectURL).not.toHaveBeenCalled();
   f.scope.stop();
@@ -134,27 +143,97 @@ it('清理缓存期间的迟到预览可显示，但不重新写入缓存', asyn
   expect(f.cache.write).not.toHaveBeenCalled(); f.scope.stop();
 });
 
-it('视频封面临时失败后可以手动重试，不判为不支持，也不下载原视频', async () => {
+it('正式封面只在真正可见时自动补试，成功后缓存并恢复预取', async () => {
+  vi.useFakeTimers();
   const f = setup('test.mp4');
   f.fetchChatThumbnail.mockRejectedValueOnce(new Error('network unavailable'));
   await f.media.load();
-  expect(f.media.loadingFailed.value).toBe(true);
-  expect(f.media.failed.value).toBe(false);
-  f.callbacks[0]([{ isIntersecting: false }]);
+  expect(f.media.coverState.value).toBe('retry');
+  expect(f.margins).toEqual(['240px 0px', '0px']);
+  // 切换观察范围之前已排队的预取回调不能触发补试。
   f.callbacks[0]([{ isIntersecting: true }]);
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(1);
   f.fetchChatThumbnail.mockResolvedValueOnce(new Blob(['cover']));
-  // 执行实际模板的失败分支，点击文件卡片中交给用户的按钮。
-  const render = new Function('Vue', compile(descriptor.template!.content, { prefixIdentifiers: true }).code)(
-    { ...Vue, resolveComponent: (name: string) => name });
-  const root = render({ attachment: { id: 'file' }, format: { kind: 'video' },
-    loadingFailed: f.media.loadingFailed.value, load: f.media.load }, []);
-  const card = root.children.find((child: Vue.VNode) => child.type === 'ChatFileCard');
-  const retry = card?.children.find((child: Vue.VNode) => child.props?.['aria-label'] === '重试视频封面');
-  expect(retry?.type).toBe('button');
-  await retry.props.onClick();
+  f.intersect(true);
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(501);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
   expect(f.media.source.value).toBe('blob:media');
-  expect(f.media.loadingFailed.value).toBe(false);
+  expect(f.media.coverState.value).toBe('ready');
+  expect(f.cache.write).toHaveBeenCalledOnce();
+  expect(f.margins.at(-1)).toBe('240px 0px');
   expect(f.fetchFilePreview).not.toHaveBeenCalled();
   f.scope.stop();
+});
+
+it('服务繁忙时最多补试两次，离屏或隐藏期间停止，滚动不重置额度', async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  f.fetchChatThumbnail.mockRejectedValue(new ApiRequestError(429, 'BUSY', '稍后再试'));
+  await f.media.load();
+  f.intersect(true); f.intersect(false);
+  await vi.advanceTimersByTimeAsync(10_000);
+  f.intersect(true); f.hide(true);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(1);
+  f.hide(false);
+  await vi.advanceTimersByTimeAsync(2500);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(7400);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(f.media.coverState.value).toBe('unavailable');
+  f.intersect(false); f.intersect(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(3);
+  f.scope.stop();
+});
+
+it.each([401, 403, 404])('正式封面返回 %i 时保留文件卡片，停止请求', async status => {
+  vi.useFakeTimers();
+  const f = setup();
+  f.fetchChatThumbnail.mockRejectedValue(new ApiRequestError(status, 'UNAVAILABLE', '无法读取'));
+  await f.media.load();
+  f.intersect(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.media.coverState.value).toBe('unavailable');
+  expect(f.fetchChatThumbnail).toHaveBeenCalledOnce();
+  f.scope.stop();
+});
+
+it('最后一次补试已发出时隐藏窗口，取消请求且返回前台不会再发', async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  const timeout = new DOMException('timeout', 'TimeoutError');
+  f.fetchChatThumbnail.mockRejectedValueOnce(timeout).mockRejectedValueOnce(timeout);
+  await f.media.load();
+  f.intersect(true);
+  await vi.advanceTimersByTimeAsync(11_000);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(3);
+  const signal = f.fetchChatThumbnail.mock.lastCall![2];
+  f.hide(true);
+  expect(signal.aborted).toBe(true);
+  f.hide(false); f.intersect(true); f.resolve(new Blob(['late']));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(3);
+  expect(f.cache.write).not.toHaveBeenCalled();
+  f.scope.stop();
+});
+
+it('切群销毁卡片后取消补试，迟到的补试结果不能写入缓存', async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  f.fetchChatThumbnail.mockRejectedValueOnce(new ApiRequestError(503, 'BUSY', '稍后再试'));
+  await f.media.load();
+  f.intersect(true);
+  await vi.advanceTimersByTimeAsync(2500);
+  f.scope.stop();
+  f.resolve(new Blob(['late']));
+  f.intersect(true); f.hide(false);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.cache.write).not.toHaveBeenCalled();
+  expect(f.createObjectURL).not.toHaveBeenCalled();
+  expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(2);
 });

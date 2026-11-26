@@ -2,7 +2,8 @@
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
 import RecordingThumbnail from './settings/RecordingThumbnail.vue';
 import ChatMediaProgress from './ChatMediaProgress.vue';
-import { Download, Play, RotateCcw } from '@lucide/vue';
+import { Download, Play } from '@lucide/vue';
+import { ApiRequestError } from '../auth/authApi';
 import { fetchChatThumbnail, type ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
@@ -18,26 +19,31 @@ const canLoadCover = computed(() => format.value?.kind === 'video'
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
 const frameStyle = computed(() => chatMediaFrameStyle(props.attachment.width ?? 420, props.attachment.height ?? 236.25));
-const failed = ref(false);
-const loadingFailed = ref(false);
+const coverState = ref<'ready' | 'retry' | 'unavailable'>('ready');
 const cacheId = computed(() => `cover:${props.attachment.id}`);
 let controller: AbortController | undefined;
 let observer: IntersectionObserver | undefined;
 let disposed = false;
 let pendingMiss = false;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
+const retryDelays = [2000, 8000];
+let retries = 0;
+let inRange = false;
 
 function release() {
   clearTimeout(retryTimer); retryTimer = undefined;
+  if (controller && coverState.value === 'retry' && retries >= retryDelays.length) {
+    coverState.value = 'unavailable';
+    stopObserving();
+  }
   controller?.abort(); controller = undefined;
   if (source.value) URL.revokeObjectURL(source.value);
   source.value = '';
 }
 async function load() {
   if (props.pending && props.localPreview) return;
-  if (disposed || source.value || controller || retryTimer !== undefined || failed.value || !canLoadCover.value) return;
+  if (disposed || source.value || controller || retryTimer !== undefined || coverState.value === 'unavailable' || !canLoadCover.value) return;
   const request = controller = new AbortController();
-  loadingFailed.value = false;
   const revision = cache?.revision;
   try {
     const cached = cache && !props.pending ? await cache.read<Blob>('image', props.groupId, cacheId.value) : null;
@@ -50,34 +56,87 @@ async function load() {
       if (props.pending && props.attachment.transferStatus !== 'FAILED' && !pendingMiss) {
         pendingMiss = true;
         retryTimer = setTimeout(() => { retryTimer = undefined; void load(); }, 500);
-      } else failed.value = true;
+      } else coverState.value = 'unavailable';
       return;
     }
     const blob = fetched.slice(0, fetched.size, 'image/jpeg');
     source.value = URL.createObjectURL(blob);
+    if (coverState.value === 'retry') {
+      coverState.value = 'ready';
+      retries = 0;
+      observeCover();
+    }
     // 列表只缓存封面与小图，正片在用户打开后读取。
     if (!props.pending && !(cached instanceof Blob) && fetched.size <= 8 * 1024 * 1024 && cache?.revision === revision) {
       void cache?.write('image', props.groupId, blob, cacheId.value);
     }
-  } catch {
-    if (!disposed && !request.signal.aborted && controller === request) loadingFailed.value = true;
-  } finally { if (controller === request) controller = undefined; }
+  } catch (reason) {
+    if (disposed || request.signal.aborted || controller !== request) return;
+    const transient = !(reason instanceof ApiRequestError) || reason.status === 408 || reason.status === 429 || reason.status >= 500;
+    if (props.pending || !transient || retries >= retryDelays.length) coverState.value = 'unavailable';
+    else if (coverState.value !== 'retry') {
+      coverState.value = 'retry';
+      observeCover();
+    }
+  } finally {
+    if (controller === request) {
+      controller = undefined;
+      if (coverState.value === 'unavailable') stopObserving();
+      else if (coverState.value === 'retry') refreshCover();
+    }
+  }
 }
 function decodeFailed() {
-  failed.value = true;
+  coverState.value = 'unavailable';
+  stopObserving();
   release();
   void cache?.discard('image', props.groupId, cacheId.value);
 }
-onMounted(() => {
+function refreshCover() {
+  if (disposed || !inRange) return;
+  if (document.hidden) { if (!source.value) release(); return; }
+  if (source.value || coverState.value === 'unavailable' || controller || retryTimer !== undefined) return;
+  if (coverState.value !== 'retry') { void load(); return; }
+  const delay = retryDelays[retries];
+  if (delay === undefined) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = undefined;
+    if (!inRange || disposed || document.hidden) return;
+    // 已发起的补试计入额度，滚出再滚回也不能反复启动同一请求。
+    retries++;
+    void load();
+  }, delay + Math.random() * 500);
+}
+
+function stopObserving() {
+  observer?.disconnect();
+  observer = undefined;
+  document.removeEventListener('visibilitychange', refreshCover);
+  inRange = false;
+}
+function observeCover() {
   if (!frame.value || !canLoadCover.value) return;
-  observer = new IntersectionObserver(entries => {
-    if (disposed) return;
-    if (entries.at(-1)?.isIntersecting) { if (!loadingFailed.value) void load(); }
-    else release();
-  }, { root: frame.value.closest('.message-list'), rootMargin: '240px 0px' });
-  observer.observe(frame.value);
+  stopObserving();
+  const current = new IntersectionObserver(entries => {
+    if (disposed || observer !== current) return;
+    inRange = entries.at(-1)?.isIntersecting === true;
+    if (inRange) {
+      document.addEventListener('visibilitychange', refreshCover);
+      refreshCover();
+    } else {
+      document.removeEventListener('visibilitychange', refreshCover);
+      release();
+    }
+  }, { root: frame.value.closest('.message-list'), rootMargin: coverState.value === 'retry' ? '0px' : '240px 0px' });
+  observer = current;
+  current.observe(frame.value);
+}
+onMounted(observeCover);
+onScopeDispose(() => {
+  disposed = true;
+  stopObserving();
+  release();
 });
-onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 </script>
 
 <template>
@@ -90,14 +149,12 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
       <span v-else class="chat-media-placeholder" aria-hidden="true" />
       <slot />
     </div>
-    <ChatImage v-else-if="format?.kind === 'image' && !failed" :group-id="groupId" :attachment-id="attachment.id"
+    <ChatImage v-else-if="format?.kind === 'image' && coverState !== 'unavailable'" :group-id="groupId" :attachment-id="attachment.id"
       :width="attachment.width ?? 420" :height="attachment.height ?? 236.25" :byte-size="attachment.byteSize"
       :alt="attachment.fileName || '图片'" :file-content-type="format.contentType"
-      @preview="emit('preview', $event)" @unpreviewable="failed = true" />
-    <ChatFileCard v-else-if="!format || format.kind === 'audio' || failed || (format.kind === 'video' && loadingFailed)"
-      :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="emit('preview')">
-      <button v-if="format?.kind === 'video' && loadingFailed && !failed && !videoLoading" type="button"
-        aria-label="重试视频封面" title="重试视频封面" @click="load()"><RotateCcw :size="15" /></button>
+      @preview="emit('preview', $event)" @unpreviewable="coverState = 'unavailable'" />
+    <ChatFileCard v-else-if="!format || format.kind === 'audio' || coverState !== 'ready'"
+      :group-id="groupId" :attachment="attachment" :preview-disabled="coverState === 'unavailable' && format?.kind === 'image'" @preview="emit('preview')">
       <progress v-if="videoLoading" max="100" :value="videoPercent" aria-label="视频加载进度" />
     </ChatFileCard>
     <div v-else class="chat-inline-media" :style="frameStyle">
