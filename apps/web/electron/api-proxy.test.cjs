@@ -15,6 +15,7 @@ function proxyFixture(overrides = {}) {
   // 沿用主进程入口隔离测试：执行正式策略与代理函数，不启动客户端、读取真实会话或连接服务器。
   const context = {
     URL, Headers, Request, Response, Buffer, AbortSignal, performance, writeMediaDiagnostic() {},
+    reportIdPattern: require('./diagnostic-reports.cjs').reportIdPattern,
     backend: new URL('https://example.test'),
     sessionToken: 'test-session',
     sessionRevision: 0, sessionLoginInProgress: false, sessionClearTask: undefined,
@@ -31,6 +32,23 @@ function proxyFixture(overrides = {}) {
   const serve = runInNewContext(`${main.slice(policyStart, policyEnd)}\n${main.slice(serveStart, serveEnd)}; serveApplication`, context);
   return { serve, forwarded, context };
 }
+
+test('只为服主成功读取的日志补充本机接收位置，撤权不读取文件', async () => {
+  let status = 403;
+  let lookups = 0;
+  const { serve } = proxyFixture({
+    resolve, app: { getPath: () => '/local' },
+    net: { fetch: async () => Response.json(status === 200 ? [{ id: 'first', savedPath: 'remote-path' }] : {}, { status }) },
+    locateReceivedReport: async () => { lookups++; return '/local/verified'; },
+  });
+  const request = () => serve(new Request('lycan://app/api/diagnostics/reports'));
+  assert.equal((await request()).status, 403);
+  assert.equal(lookups, 0);
+  status = 200;
+  const result = await request();
+  assert.deepEqual(await result.json(), [{ id: 'first', savedPath: '/local/verified' }]);
+  assert.equal(lookups, 1);
+});
 
 test('语音凭证分开记录本地准备、响应头往返和同一响应的服务端计时', async () => {
   const entries = [];

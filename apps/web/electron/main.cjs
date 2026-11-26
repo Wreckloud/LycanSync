@@ -25,7 +25,7 @@ const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, locateReceivedReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { createWindowThumbnailLoader } = require('./native-window-thumbnails.cjs');
@@ -92,7 +92,6 @@ const apiRoutePolicies = new Map([
   ['POST /api/groups/join', {}],
 ]);
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const reportIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupManagementPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:candidates|members|owner|invite-code(?:\/refresh)?)$/i;
 const groupMemberPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupMemberProfilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/profile$/i;
@@ -729,6 +728,14 @@ async function serveApplication(request) {
         delete result.sessionToken;
         return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
       }
+      if (request.method === 'GET' && url.pathname === '/api/diagnostics/reports' && response.ok) {
+        failureMessage = '无法核对已接收的日志，请检查日志目录。';
+        const directory = resolve(app.getPath('userData'), 'exports', 'received');
+        const entries = await response.json();
+        const listed = await Promise.all(entries.map(async entry => ({ ...entry, savedPath: await locateReceivedReport(directory, entry) })));
+        if (!token || token !== sessionToken) return Response.json({ detail: '登录状态已变化。' }, { status: 403 });
+        return Response.json(listed, { headers: { 'Cache-Control': 'no-store' } });
+      }
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('Content-Type') || 'application/json',
         // net.fetch 已解压响应体，压缩后的长度不能用于页面收到的内容。
@@ -1101,19 +1108,39 @@ async function prepareDiagnosticReport(event, text, upload) {
 }
 ipcMain.handle('diagnostics:export', (event, text) => prepareDiagnosticReport(event, text, false));
 ipcMain.handle('diagnostics:prepare-upload', (event, text) => prepareDiagnosticReport(event, text, true));
-ipcMain.handle('diagnostics:receive', async (event, id, size) => {
+const receivingReports = new Map();
+ipcMain.handle('diagnostics:receive', async (event, id, size, userId, uploadedAt) => {
   if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id) || !Number.isSafeInteger(size) || size <= 0 || size > 40 * 1024 * 1024) {
     throw new Error('报告信息无效，请刷新列表。');
   }
   const revision = sessionRevision;
-  const signal = AbortSignal.timeout(30 * 60_000);
-  const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports/' + id, { signal }));
-  if (!response.ok || revision !== sessionRevision || !trustedSender(event)) throw new Error('无法接收报告，请刷新列表并确认服主身份。');
   const directory = resolve(app.getPath('userData'), 'exports', 'received');
-  await mkdir(directory, { recursive: true });
-  const filePath = resolve(directory, 'LycanSync-diagnostics-' + id + '.json');
-  await saveChatDownload(filePath, response, size, signal, () => {});
-  return filePath;
+  const filePath = receivedReportPath(directory, id, userId, uploadedAt);
+  const key = revision + ':' + id;
+  if (receivingReports.has(key)) return receivingReports.get(key);
+  const task = (async () => {
+    const signal = AbortSignal.timeout(30 * 60_000);
+    const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports/' + id, { signal }));
+    const checkSession = () => {
+      if (closing || revision !== sessionRevision || !trustedSender(event)) throw new Error('接收已中止，登录状态已变化。');
+    };
+    checkSession();
+    if (!response.ok) throw new Error('无法接收报告，请确认日志仍在且拥有服主权限。');
+    await mkdir(dirname(filePath), { recursive: true });
+    await saveChatDownload(filePath, response, size, signal, checkSession);
+    return filePath;
+  })();
+  receivingReports.set(key, task);
+  try { return await task; } finally { receivingReports.delete(key); }
+});
+ipcMain.handle('diagnostics:reveal', async (event, id) => {
+  if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id)) throw new Error('日志标识无效。');
+  const revision = sessionRevision;
+  const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports'));
+  if (!response.ok) throw new Error('无法读取日志，请确认服主权限。');
+  const entry = (await response.json()).find(item => item.id === id);
+  if (!entry?.savedPath || closing || revision !== sessionRevision || !trustedSender(event)) throw new Error('日志已移除或尚未接收。');
+  shell.showItemInFolder(entry.savedPath);
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

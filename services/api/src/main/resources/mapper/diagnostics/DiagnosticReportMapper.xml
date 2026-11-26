@@ -14,7 +14,7 @@
         DELETE FROM diagnostic_report WHERE id IN (SELECT id FROM diagnostic_report ORDER BY uploaded_at DESC, id DESC OFFSET 32)
     </delete>
     <select id="list" resultType="com.lycansync.api.diagnostics.model.DiagnosticReportEntry">
-        SELECT r.id, u.nickname, r.uploaded_at AS uploadedAt, r.json_bytes AS byteSize
+        SELECT r.id, r.user_id AS userId, u.nickname, r.uploaded_at AS uploadedAt, r.json_bytes AS byteSize
         FROM diagnostic_report r JOIN app_user u ON u.id = r.user_id ORDER BY r.uploaded_at DESC, r.id DESC
     </select>
     <select id="content" resultType="_byte[]">

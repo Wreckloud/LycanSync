@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, useId, watch } from 'vue';
+import { onScopeDispose, ref, useId, watch } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 import ExpandSection from '../ExpandSection.vue';
 import { authenticatedFetch, authRequest, readApiError } from '../../auth/authApi';
@@ -45,6 +45,24 @@ async function refreshOwner() {
   if (status.value && entries.value && !error.value && !reportsError.value) accessError.value = '';
 }
 
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let disposed = false;
+function scheduleReports() {
+  clearTimeout(refreshTimer);
+  if (disposed || !props.active || accessError.value || document.hidden) return;
+  refreshTimer = setTimeout(() => { void reports.refresh().then(scheduleReports); }, reportsError.value ? 30_000 : 5_000);
+}
+function visibilityChanged() {
+  clearTimeout(refreshTimer);
+  if (props.active && !document.hidden && !accessError.value) void reports.refresh().then(scheduleReports);
+}
+document.addEventListener('visibilitychange', visibilityChanged);
+onScopeDispose(() => {
+  disposed = true;
+  clearTimeout(refreshTimer);
+  document.removeEventListener('visibilitychange', visibilityChanged);
+});
+watch(() => [props.active, accessError.value], () => scheduleReports(), { immediate: true });
 watch(() => props.active, (active) => {
   if (active) void refreshOwner();
   else advancedOpen.value = false;
@@ -59,7 +77,7 @@ watch(() => props.active, (active) => {
   <section v-else-if="active" class="settings-section owner-settings">
     <MemberAccessSettings :active="active" @notice="emit('notice', $event)" />
     <ReceivedDiagnosticReports :entries="entries" :loading="readingReports" :read-error="reportsError"
-      @refresh="reports.refresh()" @denied="revokeAccess" />
+      @denied="revokeAccess" />
     <section class="settings-block">
       <h2>服务器配置</h2>
       <dl class="owner-status" :aria-busy="loading && !status">

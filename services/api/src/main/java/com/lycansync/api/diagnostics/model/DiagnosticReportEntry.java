@@ -11,4 +11,4 @@ import java.util.UUID;
  * @since 2026-11-24
  */
 @Schema(description = "成员主动上传的诊断报告")
-public record DiagnosticReportEntry(UUID id, String nickname, Instant uploadedAt, long byteSize) {}
+public record DiagnosticReportEntry(UUID id, UUID userId, String nickname, Instant uploadedAt, long byteSize) {}

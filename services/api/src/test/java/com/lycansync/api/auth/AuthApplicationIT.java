@@ -108,6 +108,7 @@ class AuthApplicationIT {
         mvc.perform(get(path).header("Authorization", member)).andExpect(status().isForbidden());
         var listing = mvc.perform(get(path).header("Authorization", owner)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(3)).andExpect(jsonPath("$[0].nickname").value("Friend"))
+                .andExpect(jsonPath("$[0].userId").value(service.authenticate(member.substring(7)).id().toString()))
                 .andExpect(jsonPath("$[0].byteSize").value(json.length)).andReturn().getResponse();
         String file = path + "/" + new ObjectMapper().readTree(listing.getContentAsByteArray()).get(0).get("id").asText();
         mvc.perform(get(file).header("Authorization", member)).andExpect(status().isForbidden());

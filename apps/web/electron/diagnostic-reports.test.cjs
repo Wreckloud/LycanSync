@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { mkdir, mkdtemp, readFile, rename, rm, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, locateReceivedReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { readFileSync } = require('node:fs');
 const { runInNewContext } = require('node:vm');
 
@@ -232,7 +232,7 @@ test('服主接收完整 JSON 到固定目录，短响应和无效标识不覆�
   const id = '30122072-cabb-4be1-89ab-a49351c83457';
   const json = report('联测');
   Object.assign(f.state, { sessionRevision: 1, sessionToken: 'test', APP_ORIGIN: 'lycan://app', AbortSignal, Request,
-    reportIdPattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    reportIdPattern, receivedReportPath, dirname: require('node:path').dirname,
     app: { getPath: () => directory }, mkdir, saveChatDownload: require('./chat-download.cjs').saveChatDownload,
     serveApplication: async request => { assert.equal(request.url, 'lycan://app/api/diagnostics/reports/' + id); return new Response(json); } });
   const receive = f.handlers.get('diagnostics:receive');
@@ -241,6 +241,24 @@ test('服主接收完整 JSON 到固定目录，短响应和无效标识不覆�
   const path = await receive(trusted, id, size);
   assert.equal(path, join(directory, 'exports', 'received', 'LycanSync-diagnostics-' + id + '.json'));
   assert.equal(await readFile(path, 'utf8'), json);
+  const archive = join(directory, 'exports', 'received');
+  const userId = '640d8632-a8af-44dc-ad96-15418a6b2f51';
+  const uploadedAt = '2026-11-26T20:30:00Z';
+  const entry = { id, userId, uploadedAt, byteSize: size };
+  assert.equal(await locateReceivedReport(archive, entry), path);
+  assert.equal(await locateReceivedReport(archive, { ...entry, byteSize: size + 1 }), null);
+  await assert.rejects(receive(trusted, id, size, '../outside', uploadedAt), /无效/);
+  const grouped = await receive(trusted, id, size, userId, uploadedAt);
+  assert.equal(grouped, join(archive, userId, new Date(uploadedAt).toLocaleDateString('sv-SE'), 'LycanSync-diagnostics-' + id + '.json'));
+  assert.equal(await locateReceivedReport(archive, entry), grouped);
+  let revealed;
+  f.state.shell = { showItemInFolder: file => { revealed = file; } };
+  const reveal = f.handlers.get('diagnostics:reveal');
+  f.state.serveApplication = async () => Response.json([{ ...entry, savedPath: grouped }]);
+  await reveal(trusted, id);
+  assert.equal(revealed, grouped);
+  f.state.serveApplication = async () => new Response(null, { status: 403 });
+  await assert.rejects(reveal(trusted, id), /服主权限/);
   f.state.serveApplication = async () => new Response('{');
   await assert.rejects(receive(trusted, id, size), /完整下载/);
   await assert.rejects(receive(trusted, '../test', size), /无效/);

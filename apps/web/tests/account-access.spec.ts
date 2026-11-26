@@ -97,6 +97,7 @@ test('账号绑定只在 QQ 可用时展示，慢刷新和暂时失败保留已�
 });
 
 test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展示有效数据', async ({ page }, testInfo) => {
+  await page.clock.install();
   const owner = { id: 'preview-owner', nickname: '服主', avatar: '', administrator: true };
   await page.route('**/api/auth/me', route => route.fulfill({ json: owner }));
   await page.route('**/api/auth/session', route => route.fulfill({ json: owner }));
@@ -108,7 +109,7 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
   let summaryCode = 200;
   let reportsCode = 200;
   let name = '旧名称';
-  let reports = [{ id: 'sample-report', nickname: '上传成员', byteSize: 1024, uploadedAt: '2026-11-01T09:00:00Z' }];
+  let reports = [{ id: 'sample-report', userId: 'first', nickname: '上传成员', byteSize: 1024, uploadedAt: '2026-11-01T09:00:00Z' }];
   let release!: () => void;
   let gate = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/auth/server-settings', async route => {
@@ -140,7 +141,7 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
   await expect.poll(() => [summaryReads, reportsReads]).toEqual([2, 2]);
   await tab('快捷键').click();
   await tab('服主管理').click();
-  await tab('刷新').click();
+  await expect(tab('刷新')).toHaveCount(0);
   await expect(values.first()).toHaveText(name);
   await expect(page.getByText('上传成员', { exact: true })).toBeVisible();
   // 跨过已有的慢加载提示阈值后，背景刷新仍不顶动控件。
@@ -154,6 +155,21 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
   await expect(values.first()).toHaveText(name);
   await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
 
+  reports = [
+    { id: 'c', userId: 'second', nickname: '同名', byteSize: 32, uploadedAt: '2026-11-03T09:00:00Z' },
+    { id: 'b', userId: 'first', nickname: '同名', byteSize: 32, uploadedAt: '2026-11-02T09:00:00Z' },
+    { id: 'a', userId: 'first', nickname: '同名', byteSize: 32, uploadedAt: '2026-11-01T09:00:00Z' },
+  ];
+  await page.clock.fastForward(5500);
+  await expect(page.getByRole('heading', { name: '同名', exact: true })).toHaveCount(2);
+  await expect(page.locator('.report-member').nth(1).locator('.report-day')).toHaveCount(2);
+  await expect(tab('下载日志')).toHaveCount(3);
+  await page.locator('.settings-block').filter({ has: page.getByRole('heading', { name: '收到的日志' }) })
+    .screenshot({ path: testInfo.outputPath('grouped-inbox.png'), animations: 'disabled' });
+  reports = [];
+  await page.clock.fastForward(5500);
+  await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
+
   reportsCode = summaryCode = 503;
   await tab('快捷键').click();
   await tab('服主管理').click();
@@ -162,7 +178,7 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
   await expect(values.first()).toHaveText(name);
   await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
   reportsCode = 403;
-  await tab('刷新').click();
+  await page.clock.fastForward(31_000);
   await expect(values).toHaveCount(0);
   await expect(tab('邀请新朋友')).toHaveCount(0);
   await expect(page.getByText('还没有成员上传日志。')).toHaveCount(0);
@@ -178,6 +194,47 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
   await expect(page.getByText('还没有成员上传日志。')).toHaveCount(0);
   release();
   await expect(values.first()).toHaveText(name);
+});
+
+test('桌面收件箱跳过已有文件，新上传自动接收，失败可单独重试', async ({ page }) => {
+  await page.clock.install();
+  const owner = { id: 'owner', nickname: '服主', avatar: '', administrator: true };
+  await page.route('**/api/auth/me', route => route.fulfill({ json: owner }));
+  await page.route('**/api/auth/session', route => route.fulfill({ json: owner }));
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', initialized: true } }));
+  await page.route('**/api/groups', route => route.fulfill({ json: [] }));
+  await page.route('**/api/auth/server-settings', route => route.fulfill({ json: { serverName: '测试服' } }));
+  const entry = { nickname: '朋友', userId: 'friend', uploadedAt: '2026-11-26T09:00:00Z', byteSize: 1024 };
+  const rows = [{ ...entry, id: 'existing', savedPath: '/received/existing.json' }];
+  await page.route('**/api/diagnostics/reports', route => route.fulfill({ json: rows }));
+  const requests: string[] = [];
+  await page.exposeFunction('receiveForTest', (id: string) => {
+    requests.push(id);
+    if (id === 'first' && requests.length === 1) throw new Error('模拟接收失败');
+    const path = '/received/' + id + '.json';
+    rows.find(row => row.id === id)!.savedPath = path;
+    return path;
+  });
+  const tab = (name: string) => page.getByRole('button', { name, exact: true });
+  await page.goto('/');
+  await tab('设置').click();
+  await page.evaluate(() => {
+    const receiveDiagnosticReport = (window as unknown as { receiveForTest(id: string): Promise<string> }).receiveForTest;
+    Object.defineProperty(window, 'lycanDesktop', { configurable: true, value: { receiveDiagnosticReport } });
+  });
+  await tab('服主管理').click();
+  await expect(tab('在文件夹中显示')).toHaveCount(1);
+  rows.unshift({ ...entry, id: 'first', savedPath: '' }, { ...entry, id: 'second', savedPath: '' });
+  await page.clock.fastForward(5_500);
+  await expect(tab('重试接收')).toBeVisible();
+  await expect(tab('在文件夹中显示')).toHaveCount(2);
+  expect(requests).toEqual(['first', 'second']);
+  await tab('重试接收').click();
+  await expect(tab('在文件夹中显示')).toHaveCount(3);
+  await tab('快捷键').click();
+  await tab('服主管理').click();
+  await expect(tab('在文件夹中显示')).toHaveCount(3);
+  expect(requests).toEqual(['first', 'second', 'first']);
 });
 
 test('仅服主显示邀请面板且生成链接只在成功后展示', async ({ page }, testInfo) => {
