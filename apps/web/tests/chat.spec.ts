@@ -1234,8 +1234,8 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await expect(page.getByRole('button', { name: '取消发送' })).toBeVisible();
     await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', '50');
     await page.evaluate(() => window.dispatchEvent(new Event('resume-test-upload')));
-    await expect(page.getByText('正在处理视频…')).toBeVisible();
-    await expect(page.getByRole('progressbar', { name: '正在处理视频…' })).not.toHaveAttribute('value');
+    await expect(page.getByText('等待服务器确认…')).toBeVisible();
+    await expect(page.getByRole('progressbar', { name: '等待服务器确认…' })).not.toHaveAttribute('value');
     const pending = peer.locator('.chat-transfer-media');
     await expect(pending.getByRole('button')).toHaveCount(0);
     const cover = await pending.locator('.chat-inline-media').boundingBox();

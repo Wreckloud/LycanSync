@@ -15,14 +15,15 @@ defineEmits<{ retry: [job: Outgoing]; dismiss: [job: Outgoing] }>();
 const kind = computed(() => props.message.type === 'IMAGE' ? 'image' : props.message.attachment && chatMediaFormat(props.message.attachment)?.kind);
 const visual = computed(() => kind.value === 'video' || kind.value === 'image');
 const sendingText = useLoadingHint(() => !props.message.attachment && Boolean(props.job && props.job.state !== 'failed'));
-const uploaded = computed(() => props.job?.state === 'sending' && props.job.item
+// 文件流读完时，桌面代理可能仍在上传；只有服务端响应才能确认发送完成。
+const awaitingConfirmation = computed(() => props.job?.state === 'sending' && props.job.item
   && props.job.progress >= props.job.item.file.size);
-const percent = computed(() => props.job?.state === 'sending' && props.job.item?.file.size && !uploaded.value
+const percent = computed(() => props.job?.state === 'sending' && props.job.item?.file.size && !awaitingConfirmation.value
   ? Math.floor(100 * props.job.progress / props.job.item.file.size) : undefined);
 const statusText = computed(() => {
   if (!props.job) return props.message.attachment?.transferStatus === 'FAILED' ? '上传未完成' : '文件上传中…';
   if (props.job?.error) return props.job.error;
-  if (uploaded.value) return props.job?.item?.optimizeVideo ? '正在处理视频…' : '等待发送确认…';
+  if (awaitingConfirmation.value) return '等待服务器确认…';
   if (percent.value !== undefined) return visual.value && props.job.item
     ? `${formatAttachmentSize(props.job.progress)} / ${formatAttachmentSize(props.job.item.file.size)}`
     : `正在上传 ${percent.value}%`;
@@ -43,7 +44,7 @@ const statusText = computed(() => {
       <button v-else-if="job?.item?.kind === 'FILE'" type="button" aria-label="取消上传" title="取消上传" @click="job.controller.abort()"><X :size="15" /></button>
     </template>
     <AppProgress v-if="job ? job.state !== 'failed' : message.attachment.transferStatus !== 'FAILED'"
-      :percent="percent" :label="uploaded ? statusText : '文件上传进度'" />
+      :percent="percent" :label="awaitingConfirmation ? statusText : '文件上传进度'" />
   </ChatFileCard>
   <template v-else-if="visual && message.attachment">
     <ChatFileMedia class="chat-transfer-media" :group-id="groupId" :attachment="message.attachment" pending :local-preview="job?.item?.previewUrl">
@@ -51,7 +52,7 @@ const statusText = computed(() => {
         <span class="chat-media-play"><RotateCcw :size="20" /></span>
       </button>
       <ChatMediaProgress v-else-if="message.attachment?.transferStatus !== 'FAILED' || job"
-        :percent="percent" :label="uploaded ? statusText : '文件上传进度'" />
+        :percent="percent" :label="awaitingConfirmation ? statusText : '文件上传进度'" />
       <div v-if="job?.state !== 'failed'" class="chat-media-transfer-footer">
         <small :role="percent === undefined ? 'status' : undefined">{{ statusText }}</small>
         <button v-if="job?.item" type="button" aria-label="取消发送" title="取消发送" @click="job.controller.abort()"><X :size="17" /></button>
