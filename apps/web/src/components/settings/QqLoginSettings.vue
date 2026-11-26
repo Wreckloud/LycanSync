@@ -7,6 +7,7 @@ import { keepDialogFocus } from '../dialogFocus';
 import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
+const emit = defineEmits<{ saved: [] }>();
 interface QqSettings { enabled: boolean; appId: string; callbackUrl: string; appKeyConfigured: boolean; configurationError: string }
 const saved = ref<QqSettings | null>(null);
 const draft = reactive({ enabled: false, appId: '', appKey: '', callbackUrl: '' });
@@ -60,6 +61,7 @@ async function save() {
     if (!current.signal.aborted) {
       saved.value = result;
       close();
+      emit('saved');
     }
   } catch (reason) {
     if (!current.signal.aborted) error.value = reason instanceof Error ? reason.message : 'QQ 登录配置未保存';

@@ -1,71 +1,80 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, useId, watch } from 'vue';
+import { ref, useId, watch } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 import ExpandSection from '../ExpandSection.vue';
-import { authRequest } from '../../auth/authApi';
+import { authenticatedFetch, authRequest, readApiError } from '../../auth/authApi';
+import { useSettingsRead } from '../../settings/useSettingsRead';
 import InlineFeedback from '../InlineFeedback.vue';
+import { useLoadingHint } from '../useLoadingHint';
 import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import MemberAccessSettings from './MemberAccessSettings.vue';
 import UploadSettings from './UploadSettings.vue';
 import QqLoginSettings from './QqLoginSettings.vue';
-import ReceivedDiagnosticReports from './ReceivedDiagnosticReports.vue';
+import ReceivedDiagnosticReports, { type ReceivedReport } from './ReceivedDiagnosticReports.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
-const emit = defineEmits<{ notice: [message: string] }>();
+const emit = defineEmits<{ notice: [message: string]; qqSettingsSaved: [] }>();
 interface ServerSettingsStatus {
   serverName: string;
   publicUrlConfigured: boolean;
   mediaConfigured: boolean;
 }
-const status = ref<ServerSettingsStatus | null>(null);
 const advancedOpen = ref(false);
 const advancedId = useId();
-const error = ref('');
-const loading = ref(false);
-let request: AbortController | undefined;
+const accessError = ref('');
+const summary = useSettingsRead(signal => authRequest<ServerSettingsStatus>('server-settings', 'GET', undefined, signal),
+  '无法读取服务器配置状态', revokeAccess);
+const { value: status, error, loading } = summary;
+const readingSummary = useLoadingHint(() => props.active && loading.value && !status.value);
+const reports = useSettingsRead(async signal => {
+  const response = await authenticatedFetch('/api/diagnostics/reports', { signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) });
+  if (!response.ok) throw await readApiError(response);
+  return await response.json() as ReceivedReport[];
+}, '无法读取日志列表', revokeAccess);
+const { value: entries, loading: readingReports, error: reportsError } = reports;
 
-async function refresh() {
-  request?.abort();
-  const current = new AbortController();
-  request = current;
-  loading.value = true;
-  error.value = '';
-  try {
-    const result = await authRequest<ServerSettingsStatus>('server-settings', 'GET', undefined, current.signal);
-    if (!current.signal.aborted) status.value = result;
-  } catch (reason) {
-    if (!current.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取服务器配置状态';
-  } finally {
-    if (!current.signal.aborted) loading.value = false;
-  }
+function revokeAccess(message: string) {
+  summary.clear();
+  reports.clear();
+  advancedOpen.value = false;
+  accessError.value = message;
+}
+
+async function refreshOwner() {
+  await Promise.all([summary.refresh(), reports.refresh()]);
+  if (status.value && entries.value && !error.value && !reportsError.value) accessError.value = '';
 }
 
 watch(() => props.active, (active) => {
-  if (active) void refresh();
-  else { request?.abort(); loading.value = false; advancedOpen.value = false; }
+  if (active) void refreshOwner();
+  else advancedOpen.value = false;
 }, { immediate: true });
-onScopeDispose(() => request?.abort());
 </script>
 
 <template>
-  <section class="settings-section owner-settings">
+  <section v-if="active && accessError" class="settings-section">
+    <InlineFeedback :message="error || reportsError || accessError" />
+    <button type="button" class="settings-button" :disabled="loading || readingReports" @click="refreshOwner">重试</button>
+  </section>
+  <section v-else-if="active" class="settings-section owner-settings">
     <MemberAccessSettings :active="active" @notice="emit('notice', $event)" />
-    <ReceivedDiagnosticReports :active="active" />
+    <ReceivedDiagnosticReports :entries="entries" :loading="readingReports" :read-error="reportsError"
+      @refresh="reports.refresh()" @denied="revokeAccess" />
     <section class="settings-block">
       <h2>服务器配置</h2>
-      <dl v-if="status" class="owner-status">
-        <dt>服务器名称</dt><dd>{{ status.serverName }}</dd>
-        <dt>邀请入口地址</dt><dd>{{ status.publicUrlConfigured ? '已配置' : '未配置' }}</dd>
-        <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
+      <dl class="owner-status" :aria-busy="loading && !status">
+        <dt>服务器名称</dt><dd>{{ status?.serverName ?? (readingSummary ? '正在读取…' : '—') }}</dd>
+        <dt>邀请入口地址</dt><dd>{{ status ? (status.publicUrlConfigured ? '已配置' : '未配置') : '—' }}</dd>
+        <dt>媒体服务</dt><dd>{{ status ? (status.mediaConfigured ? '已配置' : '未配置') : '—' }}</dd>
       </dl>
-      <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
-      <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
+      <InlineFeedback :message="error" />
+      <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="summary.refresh()">重试</button>
       <button type="button" class="disclosure-trigger" :aria-expanded="advancedOpen" :aria-controls="advancedId" @click="advancedOpen = !advancedOpen">
         <ChevronRight :size="12" class="disclosure-arrow" :class="{ 'is-open': advancedOpen }" aria-hidden="true" />高级配置
       </button>
       <ExpandSection :open="advancedOpen" :id="advancedId">
         <div class="advanced-settings">
-          <QqLoginSettings :active="active && advancedOpen" :leaving="leaving" />
+          <QqLoginSettings :active="active && advancedOpen" :leaving="leaving" @saved="emit('qqSettingsSaved')" />
           <UploadSettings :active="active && advancedOpen" :leaving="leaving" @notice="emit('notice', $event)" />
         </div>
       </ExpandSection>

@@ -1,37 +1,20 @@
+<script lang="ts">
+export interface ReceivedReport { id: string; nickname: string; uploadedAt: string; byteSize: number }
+</script>
+
 <script setup lang="ts">
-import { onScopeDispose, ref, watch } from 'vue';
-import { authenticatedFetch, readApiError } from '../../auth/authApi';
+import { onScopeDispose, ref } from 'vue';
+import { ApiRequestError, authenticatedFetch, readApiError } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 
-const props = defineProps<{ active: boolean }>();
-interface Entry { id: string; nickname: string; uploadedAt: string; byteSize: number }
-const entries = ref<Entry[] | null>(null);
-const loading = ref(false);
+defineProps<{ entries: ReceivedReport[] | null; loading: boolean; readError: string }>();
+const emit = defineEmits<{ refresh: []; denied: [message: string] }>();
 const receiving = ref('');
 const feedback = ref('');
 const error = ref('');
-let request: AbortController | undefined;
 const lifetime = new AbortController();
 
-async function refresh() {
-  request?.abort();
-  const current = request = new AbortController();
-  loading.value = true;
-  error.value = '';
-  try {
-    const response = await authenticatedFetch('/api/diagnostics/reports', { signal: current.signal });
-    if (!response.ok) throw await readApiError(response);
-    const result: Entry[] = await response.json();
-    if (!current.signal.aborted) entries.value = result;
-  } catch (reason) {
-    if (!current.signal.aborted) {
-      if (entries.value?.length === 0) entries.value = null;
-      error.value = reason instanceof Error ? reason.message : '无法读取日志列表。';
-    }
-  } finally { if (request === current) loading.value = false; }
-}
-
-async function receive(entry: Entry) {
+async function receive(entry: ReceivedReport) {
   if (receiving.value) return;
   receiving.value = entry.id;
   error.value = feedback.value = '';
@@ -51,18 +34,19 @@ async function receive(entry: Entry) {
       feedback.value = '报告已交给浏览器下载。';
     }
   } catch (reason) {
-    if (!lifetime.signal.aborted) error.value = reason instanceof Error ? reason.message : '接收日志失败，请重试。';
+    if (lifetime.signal.aborted) return;
+    if (reason instanceof ApiRequestError && (reason.status === 401 || reason.status === 403)) emit('denied', reason.message);
+    else error.value = reason instanceof Error ? reason.message : '接收日志失败，请重试。';
   } finally { receiving.value = ''; }
 }
-watch(() => props.active, active => { if (active) void refresh(); else request?.abort(); }, { immediate: true });
-onScopeDispose(() => { request?.abort(); lifetime.abort(); });
+onScopeDispose(() => lifetime.abort());
 </script>
 
 <template>
   <section class="settings-block">
     <div class="settings-action-row">
       <h2>收到的日志</h2>
-      <button type="button" class="settings-button" :disabled="loading" @click="refresh()">刷新</button>
+      <button type="button" class="settings-button" :aria-busy="loading" @click="error = ''; emit('refresh')">刷新</button>
     </div>
     <small>每位成员保留最近 3 份，全服最多 32 份。</small>
     <p v-if="entries?.length === 0">还没有成员上传日志。</p>
@@ -71,7 +55,7 @@ onScopeDispose(() => { request?.abort(); lifetime.abort(); });
       <button type="button" class="settings-button" :disabled="!!receiving" @click="receive(entry)">{{ receiving === entry.id ? '接收中…' : '接收日志' }}</button>
     </div>
     <small v-if="feedback" role="status" class="received-path">{{ feedback }}</small>
-    <InlineFeedback :message="error" :pending="loading ? '正在读取日志…' : ''" />
+    <InlineFeedback :message="error || readError" :pending="loading && entries === null ? '正在读取日志…' : ''" />
   </section>
 </template>
 

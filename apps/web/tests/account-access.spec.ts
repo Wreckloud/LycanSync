@@ -17,13 +17,14 @@ test('邀请模式不展示测试密码注册入口', async ({ page }) => {
   await expect(page.getByLabel('密码', { exact: true })).toHaveCount(0);
 });
 
-test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留旧绑定状态', async ({ page }) => {
+test('账号绑定只在 QQ 可用时展示，慢刷新和暂时失败保留已确认昵称', async ({ page }, testInfo) => {
   const user = { id: 'member', nickname: '成员', avatar: '', signature: '', administrator: false };
   let available = false;
   let bound = false;
   let bindingFailed = false;
   let optionsFailed = false;
   let bindingReads = 0;
+  let bindingGate: Promise<void> | undefined;
   await page.route('**/api/auth/options', route => route.fulfill(optionsFailed
     ? { status: 503, json: { detail: '无法读取登录方式' } }
     : { json: { mode: 'invite', qqAvailable: available, initialized: true } }));
@@ -34,8 +35,9 @@ test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留�
   await page.route('**/api/auth/account', route => route.fulfill({ json: {
     administrator: false, recoveryConfigured: false, ownedGroups: [], candidates: [], incomingTransfer: null, transferTargetId: null,
   } }));
-  await page.route('**/api/auth/qq/binding', route => {
+  await page.route('**/api/auth/qq/binding', async route => {
     bindingReads++;
+    await bindingGate;
     return route.fulfill(bindingFailed ? { status: 503, json: { detail: '无法读取 QQ 绑定状态' } }
       : { json: { bound, nickname: bound ? '朋友' : '' } });
   });
@@ -58,19 +60,33 @@ test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留�
   await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
   await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toHaveCount(0);
 
-  bindingFailed = true;
+  let release!: () => void;
+  bindingGate = new Promise(resolve => { release = resolve; });
+  const readsBeforeSwitch = bindingReads;
+  const logout = account.getByRole('button', { name: '退出登录', exact: true });
+  const before = await logout.boundingBox();
   await reopen();
-  await expect(account.getByText('无法读取 QQ 绑定状态', { exact: true })).toBeVisible();
-  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toHaveCount(0);
-  await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toBeDisabled();
+  await expect.poll(() => bindingReads).toBe(readsBeforeSwitch + 1);
+  await reopen();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
+  expect(await logout.boundingBox()).toEqual(before);
+  expect(bindingReads).toBe(readsBeforeSwitch + 1);
+  await account.screenshot({ path: testInfo.outputPath('qq-binding-refresh.png'), animations: 'disabled' });
+  bindingFailed = true;
+  release();
+  bindingGate = undefined;
+  await expect(account.getByText('无法读取 QQ 绑定状态（当前显示上次结果）')).toBeVisible();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
+  await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toHaveCount(0);
   bindingFailed = false;
   await account.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(account.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
   await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
 
   optionsFailed = true;
   await reopen();
-  await expect(account.getByText('无法读取登录方式', { exact: true })).toBeVisible();
-  await expect(account.getByText('绑定第三方账号', { exact: true })).toHaveCount(0);
+  await expect(account.getByText('无法读取登录方式（当前显示上次结果）')).toBeVisible();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
   optionsFailed = false;
   available = false;
   const readsBeforeRetry = bindingReads;
@@ -78,6 +94,90 @@ test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留�
   await expect(account.getByText('无法读取登录方式', { exact: true })).toHaveCount(0);
   await expect(account.getByText('绑定第三方账号', { exact: true })).toHaveCount(0);
   expect(bindingReads).toBe(readsBeforeRetry);
+});
+
+test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展示有效数据', async ({ page }, testInfo) => {
+  const owner = { id: 'preview-owner', nickname: '服主', avatar: '', administrator: true };
+  await page.route('**/api/auth/me', route => route.fulfill({ json: owner }));
+  await page.route('**/api/auth/session', route => route.fulfill({ json: owner }));
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { initialized: true, mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/groups', route => route.fulfill({ json: [] }));
+  await page.route('**/api/auth/account', route => route.fulfill({ json: { administrator: true, recoveryConfigured: true, ownedGroups: [] } }));
+  let summaryReads = 0;
+  let reportsReads = 0;
+  let summaryCode = 200;
+  let reportsCode = 200;
+  let name = '旧名称';
+  let reports = [{ id: 'sample-report', nickname: '上传成员', byteSize: 1024, uploadedAt: '2026-11-01T09:00:00Z' }];
+  let release!: () => void;
+  let gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/auth/server-settings', async route => {
+    summaryReads++;
+    await gate;
+    await route.fulfill({ status: summaryCode, json: summaryCode === 200 ? { serverName: name, publicUrlConfigured: true, mediaConfigured: true } : { detail: '配置刷新失败' } });
+  });
+  await page.route('**/api/diagnostics/reports', async route => {
+    reportsReads++;
+    await gate;
+    await route.fulfill({ status: reportsCode, json: reportsCode === 200 ? reports : { detail: '日志读取失败' } });
+  });
+  const tab = (name: string) => page.getByRole('button', { name, exact: true });
+  const values = page.locator('.owner-status dd');
+  await page.goto('/');
+  await tab('设置').click();
+  expect(summaryReads).toBe(0);
+  await tab('服主管理').click();
+  await expect(values).toHaveText(['—', '—', '—']);
+  await expect(page.getByText('还没有成员上传日志。')).toHaveCount(0);
+  release();
+  await expect(values.first()).toHaveText(name);
+  await expect(page.getByText('上传成员', { exact: true })).toBeVisible();
+  const advanced = tab('高级配置');
+  const before = await advanced.boundingBox();
+  gate = new Promise(resolve => { release = resolve; });
+  await tab('快捷键').click();
+  await tab('服主管理').click();
+  await expect.poll(() => [summaryReads, reportsReads]).toEqual([2, 2]);
+  await tab('快捷键').click();
+  await tab('服主管理').click();
+  await tab('刷新').click();
+  await expect(values.first()).toHaveText(name);
+  await expect(page.getByText('上传成员', { exact: true })).toBeVisible();
+  // 跨过已有的慢加载提示阈值后，背景刷新仍不顶动控件。
+  await page.waitForTimeout(2000);
+  expect(await advanced.boundingBox()).toEqual(before);
+  expect([summaryReads, reportsReads]).toEqual([2, 2]);
+  await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-refresh.png'), animations: 'disabled' });
+  name = '新名称';
+  reports = [];
+  release();
+  await expect(values.first()).toHaveText(name);
+  await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
+
+  reportsCode = summaryCode = 503;
+  await tab('快捷键').click();
+  await tab('服主管理').click();
+  await expect(page.getByText('配置刷新失败（当前显示上次结果）')).toBeVisible();
+  await expect(page.getByText('日志读取失败（当前显示上次结果）')).toBeVisible();
+  await expect(values.first()).toHaveText(name);
+  await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
+  reportsCode = 403;
+  await tab('刷新').click();
+  await expect(values).toHaveCount(0);
+  await expect(tab('邀请新朋友')).toHaveCount(0);
+  await expect(page.getByText('还没有成员上传日志。')).toHaveCount(0);
+
+  reportsCode = summaryCode = 200;
+  await tab('重试').click();
+  await expect(values.first()).toHaveText(name);
+  await tab('返回应用').click();
+  gate = new Promise(resolve => { release = resolve; });
+  await tab('设置').click();
+  await tab('服主管理').click();
+  await expect(values).toHaveText(['—', '—', '—']);
+  await expect(page.getByText('还没有成员上传日志。')).toHaveCount(0);
+  release();
+  await expect(values.first()).toHaveText(name);
 });
 
 test('仅服主显示邀请面板且生成链接只在成功后展示', async ({ page }, testInfo) => {

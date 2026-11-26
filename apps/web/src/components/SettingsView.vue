@@ -69,6 +69,7 @@ const props = defineProps<{
 const emit = defineEmits<{ notice: [message: string]; recordingLibrary: []; close: []; logout: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string]; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
+const accountSettings = ref<InstanceType<typeof AccountSettings> | null>(null);
 const activitySettings = ref<InstanceType<typeof ActivitySettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
@@ -142,8 +143,9 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
       </header>
       <div class="settings-content">
         <p v-if="sectionDescription" :key="activeSection" class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
-        <div v-if="user.administrator && activeSection === 'members'" class="owner-settings-page">
-          <OwnerSettings @notice="emit('notice', $event)" :active="true" :leaving="leaving" />
+        <div v-if="user.administrator" v-show="activeSection === 'members'" class="owner-settings-page">
+          <OwnerSettings :key="user.id" @notice="emit('notice', $event)" @qq-settings-saved="accountSettings?.bindingChanged()"
+            :active="activeSection === 'members'" :leaving="leaving" />
         </div>
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
@@ -152,7 +154,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
             @presence-mode="emit('presenceMode', $event)"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
-          <AccountSettings @notice="emit('notice', $event)" :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" :user-id="user.id" :nickname="user.nickname" @logout="requestLogout"
+          <AccountSettings :key="user.id" ref="accountSettings" @notice="emit('notice', $event)" :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" :user-id="user.id" :nickname="user.nickname" @logout="requestLogout"
             @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
