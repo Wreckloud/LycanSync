@@ -78,7 +78,7 @@
 .chat-message-body { min-width: 0; flex: 1; }
 .chat-historical-sender { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: bold; cursor: pointer; }
 .chat-historical-sender:hover { text-decoration: underline; }
-.chat-message-meta { display: flex; align-items: center; gap: 9px; }
+.chat-message-meta { display: flex; align-items: center; gap: 9px; user-select: text; cursor: text; }
 .chat-message-meta strong { font-size: 15px; line-height: 1.25; }
 .chat-message-meta time { color: var(--subtle); font-size: 11px; }
 .chat-message-main { position: relative; display: flow-root; }

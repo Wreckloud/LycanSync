@@ -51,6 +51,52 @@ async function mockChatShell(page: Page) {
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
 }
 
+test('跨消息复制完整记录和附件说明，单段文字仍按选区复制', async ({ page }) => {
+  await mockChatShell(page);
+  const records = [chatMessage(1), chatMessage(2), imageMessage(3, 'image'),
+    fileMessage('A04', 'video', '合练.mp4', '第二局'), fileMessage('A05', 'notes', '战术.txt'),
+    { ...chatMessage(6), senderUserId: 'friend', senderNickname: '队友' }];
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname.endsWith(groupId)) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) return route.fulfill({ json: {
+      messages: url.searchParams.has('afterMessageId') ? [] : records, hasMore: false } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  await expect(page.locator('article[data-message-id]')).toHaveCount(records.length);
+  await expect(page.locator('[inert] .message-list')).toHaveCount(0);
+  async function copy(first: string, last: string) {
+    await page.evaluate(([from, to]) => {
+      const textNode = (selector: string) => Array.from(document.querySelector(selector)!.childNodes)
+        .find(node => node.nodeType === Node.TEXT_NODE && node.textContent!.length > 0)!;
+      const start = textNode(from), end = textNode(to);
+      (document.activeElement as HTMLElement | null)?.blur();
+      window.getSelection()!.setBaseAndExtent(start, 1, end, 3);
+      // 使用真实快捷键的派发目标，在内存剪贴板中检查结果。
+      document.addEventListener('copy', event => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const clipboardData = new DataTransfer();
+        const handled = !event.target!.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData }));
+        document.body.dataset.copied = handled ? clipboardData.getData('text/plain') : window.getSelection()!.toString();
+      }, { capture: true, once: true });
+    }, [first, last]);
+    await page.keyboard.press('Control+c');
+    return page.locator('body').getAttribute('data-copied');
+  }
+  const first = '[data-message-id="A02"] .chat-message-content';
+  const last = '[data-message-id="A06"] .chat-message-content';
+  const transcript = await copy(last, first);
+  const entries = transcript!.split('\n\n');
+  expect(entries.map(entry => entry.slice(entry.indexOf('\n') + 1))).toEqual([
+    'A消息 2', '[图片]', '第二局\n[视频] 合练.mp4', '[文件] 战术.txt', 'A消息 6']);
+  expect(entries[0]).toMatch(/^群主  .*2026.*:\d{2}:02\n/);
+  expect(entries.at(-1)).toMatch(/^队友  .*:\d{2}:06\n/);
+  expect(await copy(first, first)).toBe('消息');
+});
+
 test('长文本输入和清空平滑伸缩，发送后随输入框收起完整抵达最新消息', async ({ page }) => {
   await mockChatShell(page);
   await page.setViewportSize({ width: 1000, height: 720 });

@@ -350,6 +350,35 @@ function senderAvatar(message: ChatMessage) {
   return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? message.senderAvatar ?? '';
 }
 
+function copyChatSelection(event: ClipboardEvent) {
+  const selected = window.getSelection();
+  if (!event.clipboardData || !selected || selected.isCollapsed || !selected.rangeCount) return;
+  const range = selected.getRangeAt(0);
+  const list = scroll.list.value;
+  if (!list?.contains(range.commonAncestorContainer) || list.closest('[inert]')
+      || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]'))) return;
+  const ancestor = range.commonAncestorContainer;
+  const element = ancestor instanceof Element ? ancestor : ancestor.parentElement;
+  // 在同一段正文、昵称或附件名称内选字时，保留浏览器的精确复制。
+  if (element?.closest('.chat-message-main, .chat-message-meta')) return;
+
+  const selectedIds = new Set(Array.from(list.querySelectorAll<HTMLElement>('article[data-message-id]'))
+    .filter(row => range.intersectsNode(row)).map(row => row.dataset.messageId));
+  const entries = messages.value.filter(message => selectedIds.has(message.id)).map(message => {
+    const lines = [senderName(message) + '  ' + formatFullMessageTime(message.createdAt)];
+    if (message.content) lines.push(message.content);
+    if (message.attachment) {
+      const kind = message.type === 'IMAGE' ? 'image' : chatMediaFormat(message.attachment)?.kind;
+      const label = kind ? { image: '图片', video: '视频', audio: '音频' }[kind] : '文件';
+      lines.push(('[' + label + '] ' + (message.attachment.fileName ?? '')).trimEnd());
+    }
+    return lines.join('\n');
+  });
+  if (!entries.length) return;
+  event.clipboardData.setData('text/plain', entries.join('\n\n'));
+  event.preventDefault();
+}
+
 function refreshCalendar() {
   if (calendarTimer) clearTimeout(calendarTimer);
   calendarTimer = null;
@@ -424,6 +453,7 @@ onMounted(() => {
   refreshCalendar();
   void synchronization.pollMessages();
   window.addEventListener('focus', refreshOnActivation);
+  document.addEventListener('copy', copyChatSelection);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
@@ -433,6 +463,7 @@ onScopeDispose(() => {
   closeHistoricalProfile();
   if (calendarTimer) clearTimeout(calendarTimer);
   window.removeEventListener('focus', refreshOnActivation);
+  document.removeEventListener('copy', copyChatSelection);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   selection.abort();
   transfers.listeners.delete(receiveSent);
