@@ -22,8 +22,9 @@ it('关闭只移除展示，旧错误不挡成功，同文案的新操作重新�
   const settingsSection = ref('account');
   const props = reactive({ startupUpdateWarning: '' });
   const emit = vi.fn();
+  const useRecordingClipExport = vi.fn((_notify: (message: string, kind?: 'success') => void) => ({}));
   const state = scope.run(() => runInNewContext(`${source}\n({ appNotice, dismissAppNotice })`, {
-    ref, watch, rtc, viewerNoticeEvent, recording, audioOutput, audioPreferences, settingsOpen, settingsSection, props, emit,
+    ref, watch, rtc, viewerNoticeEvent, recording, audioOutput, audioPreferences, settingsOpen, settingsSection, props, emit, useRecordingClipExport,
   })) as { appNotice: { value: { id: number; message: string; kind?: string } | null }; dismissAppNotice(): void };
   try {
     expect(state.appNotice.value?.message).toBe('连接失败');
@@ -96,5 +97,7 @@ it('关闭只移除展示，旧错误不挡成功，同文案的新操作重新�
     await nextTick();
     state.dismissAppNotice();
     expect(emit).toHaveBeenCalledWith('dismissUpdateWarning');
+    useRecordingClipExport.mock.calls[0][0]('剪辑片段已保存', 'success');
+    expect(state.appNotice.value).toMatchObject({ message: '剪辑片段已保存', kind: 'success' });
   } finally { scope.stop(); }
 });
