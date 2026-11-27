@@ -42,13 +42,14 @@ watchEffect(onCleanup => {
 
   const { context, track, responsive } = props;
   const targets = new Uint8Array(bands.length);
+  let attack = 0;
   let sample: (() => void) | undefined;
   if (track && context && context.state !== 'closed') {
     const analyser = context.createAnalyser();
     analyser.fftSize = responsive ? 2048 : 1024;
     if (responsive) {
       analyser.minDecibels = -78;
-      analyser.maxDecibels = -18;
+      analyser.maxDecibels = -2;
       analyser.smoothingTimeConstant = .4;
     }
     const input = context.createMediaStreamSource(new MediaStream([track]));
@@ -59,11 +60,23 @@ watchEffect(onCleanup => {
       Math.min(bins.length, Math.round(65 * (16000 / 65) ** (i / bands.length) * analyser.fftSize / context.sampleRate)));
     sample = () => {
       analyser.getByteFrequencyData(bins);
+      let strongest = 0;
       for (let i = 0; i < targets.length; i++) {
         let level = 0;
         for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
-        const strength = level / 255;
-        targets[i] = Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
+        targets[i] = responsive ? level : Math.round(level / 255 * 50);
+        strongest = Math.max(strongest, level);
+      }
+      if (!responsive) return;
+      // 各频段共用有限的响度补偿，接近底噪时取消补偿，避免静音段被抬高。
+      const rangeDb = analyser.maxDecibels - analyser.minDecibels;
+      const peakDb = analyser.minDecibels + strongest / 255 * rangeDb;
+      const compensationDb = Math.min(22, Math.max(-8, (-18 - peakDb) * .8))
+        * Math.min(1, Math.max(0, (peakDb + 72) / 16));
+      for (let i = 0; i < targets.length; i++) {
+        const fraction = targets[i] / 255;
+        const strength = fraction > 0 ? Math.max(0, Math.min(1, (fraction * rangeDb + compensationDb) / 60)) : 0;
+        targets[i] = Math.round(strength ** 1.5 * 82);
       }
     };
   }
@@ -71,9 +84,13 @@ watchEffect(onCleanup => {
   // 停止分享就释放音频节点，最后几帧只用已有的柱高和峰值，按静音时的速度落完。
   function draw() {
     sample?.();
+    const sounding = targets.some(level => level > 0);
+    attack = sounding ? Math.min(1, attack + .25) : Math.max(0, attack - .25);
     let remaining = false;
     bands.forEach((band, i) => {
-      const height = targets[i] || Math.max(0, band.height - 14);
+      const height = responsive
+        ? Math.max(Math.round(targets[i] * attack), Math.round(band.height * .64) - 1)
+        : targets[i] || Math.max(0, band.height - 14);
       const previousPeak = band.peak;
       if (height > 0 && height >= band.peak) { band.peak = height; band.hold = 3; }
       else if (band.hold > 0) band.hold--;

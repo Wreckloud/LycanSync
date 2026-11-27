@@ -40,6 +40,16 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   expect(playing).toHaveLength(21);
   expect(Math.min(...playing)).toBe(4);
   await card.screenshot({ path: test.info().outputPath('playing.png') });
+  // 同一组音降低 20 dB 后仍应有可读的柱高，同时保留一定强弱差。
+  await volume(.1);
+  await page.waitForTimeout(1200);
+  const normalHeight = (await levels()).height;
+  await volume(.01);
+  await page.waitForTimeout(1200);
+  const quietHeight = (await levels()).height;
+  expect(quietHeight).toBeGreaterThan(normalHeight * .7);
+  expect(quietHeight).toBeLessThan(normalHeight);
+  console.log('同一合成音降低 20 dB 前后的最高柱（px）', normalHeight, quietHeight);
   await volume(0);
   await expect.poll(async () => (await levels()).peak).toBe(0);
   await expect(spectrum).toBeVisible();
