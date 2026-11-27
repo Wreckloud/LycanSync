@@ -335,6 +335,14 @@ test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选�
   await expect(slider).toHaveAttribute('aria-valuetext', '50%');
   await expect.poll(volumes).toMatchObject({ A: expect.closeTo(0.175, 6) });
   await page.locator('.viewing-actions').screenshot({ path: testInfo.outputPath('focused-volume.png') });
+  const previous = page.getByRole('button', { name: '上一个共享画面' });
+  await previous.click(); // C 已单独静音。
+  await expect.poll(volumes).toEqual({ A: 0, B: 0, C: 0 });
+  await previous.click();
+  await expect.poll(volumes).toEqual({ A: 0, B: expect.closeTo(0.3325, 6), C: 0 });
+  await previous.click(); // 回到 A，恢复刚设的 50%。
+  await expect.poll(volumes).toEqual({ A: expect.closeTo(0.175, 6), B: 0, C: 0 });
+  await expect(page.locator('.viewing-tile')).toHaveCount(1);
   await page.setViewportSize({ width: 440, height: 800 });
   await page.locator('.viewing-surface').first().hover();
   await focusedSound.hover();
