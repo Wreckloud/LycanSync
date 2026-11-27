@@ -36,6 +36,7 @@ import { useMicrophoneTest } from './rtc/useMicrophoneTest';
 import { useMicrophoneDevices } from './rtc/useMicrophoneDevices';
 import { useAudioOutput } from './rtc/useAudioOutput';
 import RecordingLibrary from './components/settings/RecordingLibrary.vue';
+import { useRecordingClipExport } from './recording/useRecordingClipExport';
 import { useRecentGroups } from './group/useRecentGroups';
 import RecordingShareDialog from './components/settings/RecordingShareDialog.vue';
 import { useRecordingShare, RECORDING_SHARE } from './recording/useRecordingShare';
@@ -614,6 +615,7 @@ let appNoticeId = 0;
 function showAppNotice(message: string, source: string, kind?: 'success') {
   appNotice.value = { id: ++appNoticeId, message, source, kind };
 }
+const clipExport = useRecordingClipExport((message, kind) => showAppNotice(message, 'clipExport', kind));
 function dismissAppNotice() {
   if (appNotice.value?.source === 'update') emit('dismissUpdateWarning');
   appNotice.value = null;
@@ -1123,11 +1125,14 @@ function participantListening(participant: Participant) {
       </div>
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
+    <Teleport to="body" :disabled="appNotice?.source !== 'clipExport'">
     <Transition name="app-notice-motion" mode="out-in" appear @before-leave="($event as HTMLElement).inert = true">
     <AppNotice v-if="appNotice" :key="appNotice.id" :message="appNotice.message" :kind="appNotice.kind"
+      :data-dialog-notice="appNotice.source === 'clipExport' ? '' : undefined"
       :action-label="appNotice.recordingSaved ? '打开录像管理' : undefined"
       @action="openSavedRecordings" @dismiss="dismissAppNotice" />
     </Transition>
+    </Teleport>
     <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
       :name="previewParticipantName(rtc.remoteControlRequest.identity,
@@ -1351,7 +1356,7 @@ function participantListening(participant: Participant) {
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     </Transition>
     <DialogTransition>
-    <RecordingLibrary v-if="recordingLibraryContext" :status="recording.state.value" @close="recordingLibraryContext = null" />
+    <RecordingLibrary v-if="recordingLibraryContext" :status="recording.state.value" :clip-export="clipExport" @close="recordingLibraryContext = null" />
     </DialogTransition>
     <DialogTransition>
     <RecordingShareDialog v-if="recordingShare.visible.value" :key="recordingShare.entry.value?.id" :share="recordingShare" :groups="recentGroups.sorted.value" />

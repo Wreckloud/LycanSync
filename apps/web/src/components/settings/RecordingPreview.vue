@@ -8,8 +8,8 @@ import InlineFeedback from '../InlineFeedback.vue';
 import RecordingTimeline from './RecordingTimeline.vue';
 import RecordingTool from './RecordingTool.vue';
 
-const props = defineProps<{ source: string; entry: RecordingLibraryEntry; autoplay?: boolean }>();
-const emit = defineEmits<{ back: []; external: []; saved: [clip: RecordingLibraryEntry] }>();
+const props = defineProps<{ source: string; entry: RecordingLibraryEntry; autoplay?: boolean; exportBusy: boolean }>();
+const emit = defineEmits<{ back: []; external: []; exportClip: [startMs: number, endMs: number] }>();
 const share = inject(RECORDING_SHARE);
 const desktop = window.lycanDesktop;
 const player = ref<HTMLVideoElement | null>(null);
@@ -25,14 +25,15 @@ const cursor = ref(0);
 const start = ref(0);
 const end = ref(0);
 const rate = ref(0);
-const busy = ref(false);
-const progress = ref(0);
+const confirmationKind = ref<'discard' | 'export'>('discard');
 const error = ref('');
 const title = computed(() => (props.entry.applicationName || '未命名') + ' · ' + ({ recording: '录制', replay: '回放', clip: '剪辑' }[props.entry.kind ?? 'recording']));
 const lastTime = computed(() => Math.min(duration.value, cursor.value + (rate.value ? 1 / rate.value : 0)));
 const minLength = 0.1; // 桌面导出器的最短片段为 100 ms。
-const validRange = computed(() => Math.round(end.value * 1000) - Math.round(start.value * 1000) >= 100);
-let requestId = '';
+const startMs = computed(() => Math.round(start.value * 1000));
+const endMs = computed(() => Math.round(end.value * 1000));
+const selectionMs = computed(() => endMs.value - startMs.value);
+const validRange = computed(() => selectionMs.value >= 100);
 let disposed = false;
 let animation = 0;
 let seekTimer: ReturnType<typeof setTimeout> | undefined;
@@ -74,7 +75,6 @@ function snap(seconds: number, direction: 'nearest' | 'before' | 'after' = 'near
   return Math.round(frame) / rate.value;
 }
 function position(marker: 'cursor' | 'start' | 'end', seconds: number, precise: boolean) {
-  if (busy.value) return;
   const time = seconds >= duration.value ? duration.value : Math.max(0, Math.min(duration.value, snap(seconds)));
   if (marker === 'start') {
     start.value = Math.min(time, Math.max(0, snap(end.value - minLength, 'before')));
@@ -106,7 +106,7 @@ function mark(edge: 'start' | 'end') {
   if (edge === 'end' && lastTime.value - start.value >= minLength) end.value = lastTime.value >= duration.value ? duration.value : Math.min(duration.value, snap(lastTime.value));
 }
 function step(marker: 'cursor' | 'start' | 'end', direction: number) {
-  if (busy.value || !duration.value) return;
+  if (!duration.value) return;
   if (player.value && !player.value.paused) {
     stopAtCursor();
     if (rate.value) seek(Math.floor(cursor.value * rate.value + 1e-6) / rate.value, true);
@@ -120,7 +120,7 @@ function step(marker: 'cursor' | 'start' | 'end', direction: number) {
 }
 function play(fromStart = false) {
   const video = player.value;
-  if (!video || busy.value || failed.value) return;
+  if (!video || failed.value) return;
   if (!fromStart && !video.paused) { stopAtCursor(); return; }
   const target = editing.value && (fromStart || cursor.value < start.value || cursor.value >= endFrame())
     ? start.value : cursor.value >= duration.value ? 0 : cursor.value;
@@ -151,10 +151,11 @@ function cancelEdit() {
   workspace.value?.focus();
 }
 function leave() {
-  if (busy.value) return;
   stopAtCursor();
-  if (editing.value && (start.value > 0 || end.value < duration.value)) confirmation.value?.showModal();
-  else emit('back');
+  if (editing.value && (start.value > 0 || end.value < duration.value)) {
+    confirmationKind.value = 'discard';
+    confirmation.value?.showModal();
+  } else emit('back');
 }
 function keys(event: KeyboardEvent) {
   if (confirmation.value?.open || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
@@ -166,21 +167,19 @@ function keys(event: KeyboardEvent) {
   }
 }
 function shareRecording() { stopAtCursor(); cancelSeek(); share?.select(props.entry); }
-const unsubscribe = desktop?.onRecordingClipProgress?.(event => { if (event.requestId === requestId) progress.value = event.percent; });
-async function save() {
-  if (!desktop || busy.value || !validRange.value) return;
-  stopAtCursor(); cancelSeek(); busy.value = true; error.value = ''; progress.value = 0;
-  requestId = crypto.randomUUID();
-  try {
-    const clip = await desktop.exportRecordingClip(requestId, props.entry.id, Math.round(start.value * 1000), Math.round(end.value * 1000));
-    if (!disposed) emit('saved', clip);
-  } catch (reason) {
-    if (!disposed) error.value = reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '片段保存失败，请重试。';
-  } finally { requestId = ''; if (!disposed) busy.value = false; }
+function confirmExport() {
+  if (props.exportBusy || !validRange.value) return;
+  stopAtCursor(); cancelSeek();
+  confirmationKind.value = 'export';
+  confirmation.value?.showModal();
 }
-async function cancelSave() {
-  try { await desktop?.cancelRecordingClip(requestId); }
-  catch { if (!disposed) error.value = '未能取消保存，请重试。'; }
+function exportSelection() {
+  if (!confirmation.value?.open || props.exportBusy || !validRange.value) return;
+  confirmation.value.close();
+  emit('exportClip', startMs.value, endMs.value);
+}
+function selectionTime(seconds: number) {
+  return recordingTime(seconds, true).replace(/^(\d):/, '0$1:').replace(/\.00$/, '');
 }
 function playbackFailed() { failed.value = true; player.value?.pause(); }
 onMounted(async () => {
@@ -191,16 +190,15 @@ onMounted(async () => {
   } catch { /* 仍可按时间拖动和导出；逐帧操作会提示缺少帧率。 */ }
 });
 onScopeDispose(() => {
-  disposed = true; cancelSeek(); unsubscribe?.(); cancelAnimationFrame(animation);
+  disposed = true; cancelSeek(); cancelAnimationFrame(animation);
   const video = player.value;
   if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
-  if (requestId) void cancelSave();
 });
 </script>
 
 <template>
   <section ref="workspace" class="recording-workspace" role="dialog" aria-modal="true" aria-label="录像预览" tabindex="-1" @keydown="keepDialogFocus($event); keys($event)">
-    <RecordingTool label="返回录像列表" class="close" :disabled="busy" @click="leave()"><X :size="24" /></RecordingTool>
+    <RecordingTool label="返回录像列表" class="close" @click="leave()"><X :size="24" /></RecordingTool>
     <div class="stage">
       <video v-if="!failed" ref="player" :src="source" :autoplay="autoplay" :style="{ '--ratio': aspectRatio }" preload="metadata" playsinline @click="play()" @play="playbackChanged"
         @pause="playbackChanged" @timeupdate="syncClock" @ended="playbackChanged" @error="playbackFailed"
@@ -208,28 +206,34 @@ onScopeDispose(() => {
       <div v-else>暂时无法预览这个录像。<button @click="emit('external')">使用系统播放器</button></div>
     </div>
     <div class="dock">
-      <InlineFeedback :message="error" pending-key="save-clip" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
+      <InlineFeedback :message="error" />
       <div class="info"><strong>{{ title }}</strong>
         <span v-if="editing" class="selection">选区 {{ recordingTime(start, true) }} – {{ recordingTime(end, true) }}<span class="length">时长 {{ recordingTime(end - start, true) }}</span></span>
         <span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
       <RecordingTimeline ref="timeline" :source="source" :duration="duration" :cursor="cursor" :start="start" :end="end"
-        :editing="editing" :playing="playing" :disabled="busy || failed" @position="position" @step="step" />
+        :editing="editing" :playing="playing" :disabled="failed" @position="position" @step="step" />
       <div class="tools">
         <div class="center">
-          <RecordingTool v-if="editing" label="从选区开头播放" class="restart" :disabled="busy" @click="play(true)"><SkipBack :size="17" /></RecordingTool>
-          <RecordingTool v-if="editing" label="设为起点" :disabled="busy || end - cursor < minLength" @click="mark('start')"><ArrowLeftToLine :size="18" /></RecordingTool>
+          <RecordingTool v-if="editing" label="从选区开头播放" class="restart" @click="play(true)"><SkipBack :size="17" /></RecordingTool>
+          <RecordingTool v-if="editing" label="设为起点" :disabled="end - cursor < minLength" @click="mark('start')"><ArrowLeftToLine :size="18" /></RecordingTool>
           <RecordingTool v-else label="剪辑" :disabled="failed || duration < minLength" @click="edit"><ScissorsLineDashed :size="19" /></RecordingTool>
-          <RecordingTool :label="playing ? '暂停' : editing ? '播放选段' : '播放'" :disabled="busy || failed || !duration" @click="play()"><component :is="playing ? Pause : Play" :size="16" fill="currentColor" /></RecordingTool>
-          <RecordingTool v-if="editing" label="设为终点" :disabled="busy || lastTime - start < minLength" @click="mark('end')"><ArrowRightToLine :size="18" /></RecordingTool>
+          <RecordingTool :label="playing ? '暂停' : editing ? '播放选段' : '播放'" :disabled="failed || !duration" @click="play()"><component :is="playing ? Pause : Play" :size="16" fill="currentColor" /></RecordingTool>
+          <RecordingTool v-if="editing" label="设为终点" :disabled="lastTime - start < minLength" @click="mark('end')"><ArrowRightToLine :size="18" /></RecordingTool>
           <RecordingTool v-else label="分享到群聊" @click="shareRecording"><Forward :size="19" /></RecordingTool>
         </div>
-        <div v-if="editing" class="actions"><button @click="busy ? cancelSave() : cancelEdit()">{{ busy ? '取消保存' : '取消' }}</button>
-          <button class="confirm-button" :disabled="busy || !validRange" @click="save">保存片段</button></div>
+        <div v-if="editing" class="actions"><button @click="cancelEdit">取消</button>
+          <button class="confirm-button" :disabled="exportBusy || !validRange" :title="exportBusy ? '已有片段正在导出' : undefined" @click="confirmExport">保存片段</button></div>
       </div>
     </div>
-    <dialog ref="confirmation" class="discard" @keydown.esc.stop>
-      <h3>选区尚未保存</h3><p>放弃这次选区并返回录像列表？</p>
-      <footer><button autofocus @click="confirmation?.close()">继续编辑</button><button @click="emit('back')">放弃并返回</button></footer>
+    <dialog ref="confirmation" class="confirmation" aria-labelledby="recording-confirm-title" @keydown.stop>
+      <h3 id="recording-confirm-title">{{ confirmationKind === 'export' ? '导出选中片段？' : '选区尚未保存' }}</h3>
+      <p v-if="confirmationKind === 'export'">将导出所选的 {{ selectionTime(start) }}–{{ selectionTime(end) }}，共 {{ selectionMs / 1000 }} 秒。导出可能需要一些时间，你可以返回录像列表查看进度。</p>
+      <p v-else>放弃这次选区并返回录像列表？</p>
+      <footer>
+        <button autofocus @click="confirmation?.close()">继续编辑</button>
+        <button v-if="confirmationKind === 'export'" :disabled="exportBusy" @click="exportSelection">开始导出</button>
+        <button v-else @click="emit('back')">放弃并返回</button>
+      </footer>
     </dialog>
   </section>
 </template>
@@ -249,7 +253,7 @@ video { display: block; width: min(100cqw, calc(100cqh * var(--ratio))); height:
 .restart { position: absolute; right: calc(100% + 5px); background: #171c22; }
 .actions { justify-self: end; gap: 6px; }.actions button { padding: 5px 10px; }
 .actions .confirm-button:enabled { background: var(--accent); color: white; border-color: var(--accent); }
-.discard { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }.discard::backdrop { background: #080a0cc9; }.discard h3 { margin: 0; }.discard footer { display: flex; justify-content: flex-end; gap: 8px; }
+.confirmation { max-width: min(400px, calc(100vw - 48px)); padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }.confirmation::backdrop { background: #080a0cc9; }.confirmation h3 { margin: 0; }.confirmation footer { display: flex; justify-content: flex-end; gap: 8px; }
 @media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info { flex-wrap: wrap; gap: 4px 10px; }.selection { order: 1; flex-basis: 100%; }.info strong { flex: 1; }.tools { display: flex; justify-content: center; }.tools:has(.actions) { justify-content: space-between; padding-left: 44px; } }
 @media(max-width:350px) { .tools:has(.actions) { flex-wrap: wrap; gap: 6px; }.actions { margin-left: auto; } }
 </style>

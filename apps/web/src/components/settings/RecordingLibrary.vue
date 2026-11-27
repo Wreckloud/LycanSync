@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
+import type { useRecordingClipExport } from '../../recording/useRecordingClipExport';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
 import ExpandSection from '../ExpandSection.vue';
 import { ChevronUp, ChevronDown, FolderOpen, Forward, Trash2 } from '@lucide/vue';
@@ -12,7 +13,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 
-const props = defineProps<{ status: DesktopRecordingStatus }>();
+const props = defineProps<{ status: DesktopRecordingStatus; clipExport: ReturnType<typeof useRecordingClipExport> }>();
 const emit = defineEmits<{ close: [] }>();
 const share = inject(RECORDING_SHARE);
 const expandedUnavailable = ref(false);
@@ -25,7 +26,9 @@ const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording'
 const dialog = ref<HTMLElement | null>(null);
 const content = ref<HTMLElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => emit('close'));
-const library = useRecordingLibrary();
+const { task: exporting, lastSavedId } = props.clipExport;
+const resumePosition = exporting.value?.position;
+const library = useRecordingLibrary(resumePosition?.kind);
 const { entries, hasMore, loading, pendingId, notice } = library;
 const unavailable = computed(() => entries.value.filter(entry => entry.state !== 'recording' && entry.availability !== 'available'));
 const groups = computed(() => {
@@ -57,9 +60,11 @@ watch(entries, async () => {
   else viewport.scrollTop = previousTop;
 });
 watch(library.kind, () => { void library.load(); });
-function previewSavedClip(clip: RecordingLibraryEntry) {
-  preview.value = { entry: clip, autoplay: false };
-  void library.load();
+watch(lastSavedId, () => { void library.load(); });
+function exportSelection(startMs: number, endMs: number) {
+  if (!preview.value || !content.value) return;
+  const position = { kind: library.kind.value, loadedCount: entries.value.length, scrollTop: content.value.scrollTop };
+  if (props.clipExport.start(preview.value.entry.id, startMs, endMs, position)) void returnToList();
 }
 async function returnToList() {
   const id = preview.value?.entry.id;
@@ -95,7 +100,13 @@ watch([entries, notice], () => {
 function refreshOnReturn() {
   if (!loading.value && !pendingId.value) void library.load();
 }
-onMounted(() => { dialog.value?.focus(); void library.load(); window.addEventListener('focus', refreshOnReturn); });
+onMounted(async () => {
+  dialog.value?.focus();
+  window.addEventListener('focus', refreshOnReturn);
+  await library.load(false, resumePosition?.loadedCount);
+  await nextTick();
+  if (resumePosition && content.value && library.kind.value === resumePosition.kind) content.value.scrollTop = resumePosition.scrollTop;
+});
 onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 </script>
 
@@ -112,8 +123,15 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         <section v-for="group in groups" :key="group.date" class="library-day">
           <h3>{{ group.date }}</h3>
           <article v-for="entry in group.items" :key="entry.id" :data-recording-id="entry.id" class="library-row">
-            <button type="button" class="library-preview" :aria-label="`播放 ${title(entry)}`" :disabled="!canPreview(entry)" @click="preview = { entry, autoplay: true }">
-              <RecordingThumbnail play-badge :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @duration="library.updateDuration(entry, $event)" />
+            <button type="button" class="library-preview" :aria-label="`播放 ${title(entry)}${exporting?.sourceId === entry.id ? '，导出中 ' + exporting.percent + '%' : ''}`" :disabled="!canPreview(entry)" @click="preview = { entry, autoplay: true }">
+              <RecordingThumbnail :play-badge="exporting?.sourceId !== entry.id" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @duration="library.updateDuration(entry, $event)">
+                <template #overlay>
+                  <span v-if="exporting?.sourceId === entry.id" class="export-progress">
+                    导出中 {{ exporting.percent }}%
+                    <span class="export-fill" :style="{ width: exporting.percent + '%' }"></span>
+                  </span>
+                </template>
+              </RecordingThumbnail>
               <span class="library-description">
                 <strong>{{ title(entry) }}</strong>
                 <small>{{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
@@ -121,9 +139,10 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
               </span>
             </button>
             <div class="library-actions">
+              <button v-if="exporting?.sourceId === entry.id" :disabled="exporting.cancelling" @click="clipExport.cancel()">取消导出</button>
               <button type="button" aria-label="分享" title="分享" :disabled="!canPreview(entry)" @click="share?.select(entry)"><Forward :size="16" /><span>分享</span></button>
               <button type="button" class="settings-button library-icon" aria-label="在文件夹中显示" title="在文件夹中显示" :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')"><FolderOpen :size="16" /></button>
-              <button type="button" class="settings-button library-icon library-delete" aria-label="删除录像" title="删除录像" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')"><Trash2 :size="16" /></button>
+              <button type="button" class="settings-button library-icon library-delete" aria-label="删除录像" title="删除录像" :disabled="!!pendingId || entry.state === 'recording' || exporting?.sourceId === entry.id" @click="library.file(entry, 'delete')"><Trash2 :size="16" /></button>
             </div>
           </article>
         </section>
@@ -132,9 +151,10 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
             <article v-for="entry in unavailable" :key="entry.id" :data-recording-id="entry.id" class="library-row">
               <div class="library-description"><strong>{{ title(entry) }}</strong><small>{{ new Date(entry.createdAt).toLocaleDateString() }} · {{ state(entry) }}</small></div>
               <button v-if="entry.availability === 'changed'" :disabled="!!pendingId" @click="library.file(entry, 'relink')">重新关联</button>
-              <button :disabled="!!pendingId" @click="library.file(entry, 'delete')">移除记录</button>
+              <button v-if="exporting?.sourceId === entry.id" :disabled="exporting.cancelling" @click="clipExport.cancel()">取消导出</button>
+              <button :disabled="!!pendingId || exporting?.sourceId === entry.id" @click="library.file(entry, 'delete')">移除记录</button>
             </article>
-            <button v-if="unavailable.some(entry => ['missing', 'changed'].includes(entry.availability))" :disabled="!!pendingId" @click="library.file(unavailable[0]!, 'clearUnavailable')">清理失效记录</button>
+            <button v-if="unavailable.some(entry => ['missing', 'changed'].includes(entry.availability))" :disabled="!!pendingId || unavailable.some(entry => entry.id === exporting?.sourceId)" @click="library.file(unavailable[0]!, 'clearUnavailable')">清理失效记录</button>
           </ExpandSection>
           <button class="library-disclosure" :aria-expanded="expandedUnavailable" @click="expandedUnavailable = !expandedUnavailable"><component :is="expandedUnavailable ? ChevronUp : ChevronDown" :size="12" />{{ expandedUnavailable ? '收起' : '查看' }}无法读取的记录（{{ unavailable.length }}）</button>
         </section>
@@ -146,7 +166,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
     </section>
     <DialogTransition>
       <div v-if="preview" class="dialog-backdrop">
-        <RecordingPreview :key="preview.entry.id" :entry="preview.entry" :source="recordingSource(preview.entry.id)" :autoplay="preview.autoplay" @back="returnToList" @external="openExternalPreview" @saved="previewSavedClip" />
+        <RecordingPreview :key="preview.entry.id" :entry="preview.entry" :source="recordingSource(preview.entry.id)" :autoplay="preview.autoplay" :export-busy="!!exporting" @back="returnToList" @external="openExternalPreview" @export-clip="exportSelection" />
       </div>
     </DialogTransition>
   </div>
@@ -163,6 +183,8 @@ h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .library-preview { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 6px; text-align: left; background: transparent; cursor: pointer; }
 .library-preview:is(:hover, :focus-visible):enabled strong { text-decoration: underline; }
 .library-preview:disabled { cursor: default; }
+.export-progress { position: absolute; inset: 0; display: grid; place-items: center; background: #101318bb; color: white; font-size: 12px; font-variant-numeric: tabular-nums; }
+.export-fill { position: absolute; bottom: 0; left: 0; height: 4px; background: var(--accent); }
 .library-description { flex: 1; min-width: 0; display: grid; gap: 6px; }
 .library-description strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-description small { color: var(--muted); font-size: 12px; }

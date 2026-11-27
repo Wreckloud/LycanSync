@@ -77,9 +77,15 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
     ready: load,
     async register(current) {
       const file = await io.lstat(current.path);
+      // 剪辑在成品落盘后才登记；录制和回放仍先预留记录，结束时再确认。
+      const completed = current.kind === 'clip';
+      if (completed && (!file.isFile() || !file.size)) throw new Error('剪辑工具未生成有效的片段文件。');
+      const createdAt = Date.now();
       await change(items => [...items, { id: current.id, sessionId: current.librarySessionId,
-        path: current.path, kind: current.kind || 'recording', applicationName: current.applicationName || '', fileIdentity: `${file.dev}:${file.ino}`, createdAt: Date.now(),
-        durationMs: null, width: null, height: null, state: 'pending' }]);
+        path: current.path, kind: current.kind || 'recording', applicationName: current.applicationName || '', fileIdentity: `${file.dev}:${file.ino}`, createdAt,
+        durationMs: completed ? current.durationMs : null, width: completed ? current.width : null,
+        height: completed ? current.height : null, state: completed ? 'saved' : 'pending' }]);
+      return { createdAt, bytes: file.size };
     },
     finish(current) {
       return change(async items => {

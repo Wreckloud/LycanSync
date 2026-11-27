@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Route } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 
 async function selectPersonalPresence(menu: Locator, label: string) {
   await menu.getByRole('group', { name: '在线状态', exact: true }).getByRole('button', { name: label, exact: true }).click();
@@ -618,11 +618,7 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: '自由发言', exact: true }).click();
 });
 
-test('共享与录制入口合并设置，默认画质与共享偏好重开后保持', async ({ page }, testInfo) => {
-  const cacheErrors: string[] = [];
-  page.on('console', message => {
-    if (['local content cache unavailable', 'previous account content cache cleanup failed'].includes(message.text())) cacheErrors.push(message.text());
-  });
+async function installRecordingDesktop(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
       getAutoLogin: async () => ({ enabled: true, manualEntryRequired: false }),
@@ -654,9 +650,131 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
         if (reads === 1) throw new Error('test read failure');
         return { items: [], hasMore: false };
       },
+      onRecordingClipProgress: (listener: (event: { requestId: string; percent: number }) => void) => {
+        const forward = (event: Event) => listener((event as CustomEvent).detail);
+        window.addEventListener('test-clip-progress', forward);
+        return () => window.removeEventListener('test-clip-progress', forward);
+      },
       onRecordingState: () => () => {},
     } });
   });
+}
+
+test('从原录像封面跟踪、取消和完成剪辑，关闭列表或浏览其他录像时导出继续', async ({ page }) => {
+  await installRecordingDesktop(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '共享与录制', exact: true }).click();
+  await page.evaluate(() => {
+    const desktop = window.lycanDesktop!;
+    const entries: RecordingLibraryEntry[] = Array.from({ length: 57 }, (_, i) => ({
+      id: String(i), sessionId: 'test', kind: 'recording', applicationName: '录像 ' + i, createdAt: Date.now() - i,
+      durationMs: 1666, width: 320, height: 180, bytes: 9000, state: 'saved', availability: 'available',
+    }));
+    desktop.getRecordingLibrary = async (offset = 0, kind = 'all') => {
+      const matches = entries.filter(entry => kind === 'all' || entry.kind === kind);
+      return { items: matches.slice(offset, offset + 50), hasMore: matches.length > offset + 50 };
+    };
+    desktop.getRecordingFrameRate = async () => 12;
+    const src = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')!;
+    Object.defineProperty(HTMLMediaElement.prototype, 'src', { ...src, set(value: string) {
+      src.set!.call(this, value.startsWith('lycan://app/recordings/') ? '/tests/fixtures/chat-clip.webm' : value);
+    } });
+    desktop.exportRecordingClip = (requestId, sourceId, startMs, endMs) => new Promise((resolve, reject) => {
+      sessionStorage.setItem('exports', String(1 + Number(sessionStorage.getItem('exports'))));
+      sessionStorage.setItem('requestId', requestId);
+      window.addEventListener('test-clip-result', event => {
+        const error = (event as CustomEvent<string>).detail;
+        if (error) { reject(new Error(error)); return; }
+        const clip = { ...entries.find(entry => entry.id === sourceId)!, id: 'saved-clip', kind: 'clip' as const, durationMs: endMs - startMs };
+        entries.unshift(clip);
+        resolve(clip);
+      }, { once: true });
+    });
+    desktop.cancelRecordingClip = async () => { window.dispatchEvent(new CustomEvent('test-clip-result', { detail: '已取消保存片段。' })); };
+  });
+  const open = page.getByRole('button', { name: '打开本地录像管理器' });
+  await open.click();
+  const manager = page.getByRole('dialog', { name: '本地录像管理器' });
+  const filter = manager.getByRole('button', { name: '录制', exact: true });
+  await filter.click();
+  await manager.getByRole('button', { name: '加载更多' }).click();
+  const row = manager.locator('[data-recording-id="53"]');
+  const preview = page.getByRole('dialog', { name: '录像预览' });
+  const confirm = page.getByRole('dialog', { name: '导出选中片段？' });
+  async function edit() {
+    await row.getByRole('button', { name: /^播放/ }).click();
+    await preview.getByRole('button', { name: '剪辑', exact: true }).click();
+  }
+  const save = preview.getByRole('button', { name: '保存片段' });
+  const start = confirm.getByRole('button', { name: '开始导出' });
+  const progress = (percent: number) => page.evaluate(percent => {
+    window.dispatchEvent(new CustomEvent('test-clip-progress', { detail: { requestId: sessionStorage.getItem('requestId'), percent } }));
+  }, percent);
+  const finish = (error: string) => page.evaluate(detail => { window.dispatchEvent(new CustomEvent('test-clip-result', { detail })); }, error);
+  await row.scrollIntoViewIfNeeded();
+  const scrollTop = () => manager.locator('.recording-library-content').evaluate(element => element.scrollTop);
+  const before = await scrollTop();
+  expect(before).toBeGreaterThan(0);
+  await edit();
+  const selection = await preview.locator('.selection').innerText();
+  const size = await preview.locator('video').boundingBox();
+  for (const dismiss of ['escape', 'button']) {
+    await save.click();
+    await expect(confirm).toContainText(/将导出所选的 .+，共 .+ 秒/);
+    if (dismiss === 'escape') await page.keyboard.press('Escape');
+    else await confirm.getByRole('button', { name: '继续编辑' }).click();
+    await expect(confirm).toHaveCount(0);
+    expect(await preview.locator('.selection').innerText()).toBe(selection);
+    expect(await preview.locator('video').boundingBox()).toEqual(size);
+  }
+  await save.click();
+  await start.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+  await expect(preview).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem('exports'))).toBe('1');
+  expect(await scrollTop()).toBe(before);
+  await progress(42);
+  await expect(row.getByText('导出中 42%')).toBeInViewport();
+  await expect(row.getByRole('button', { name: '删除录像' })).toBeDisabled();
+  await manager.getByRole('button', { name: '关闭', exact: true }).click();
+  await progress(75);
+  await open.click();
+  await expect(filter).toHaveAttribute('aria-pressed', 'true');
+  await expect(row.getByText('导出中 75%')).toBeInViewport();
+  await row.getByRole('button', { name: '取消导出' }).click();
+  await expect(row.getByRole('button', { name: '删除录像' })).toBeEnabled();
+  await expect(page.locator('.app-notice')).toHaveCount(0);
+
+  await edit(); await save.click(); await start.click();
+  await progress(100);
+  await expect(row.getByText('导出中 100%')).toBeVisible();
+  await expect(page.getByText('剪辑片段已保存')).toHaveCount(0);
+  await finish('录像列表未能保存，请检查录像目录后重试。');
+  await expect(page.getByRole('alert')).toHaveText('录像列表未能保存，请检查录像目录后重试。');
+  await page.getByRole('button', { name: '关闭提示' }).click();
+  await expect(manager.locator('[data-recording-id="saved-clip"]')).toHaveCount(0);
+  await edit(); await save.click(); await start.click();
+  await manager.locator('[data-recording-id="54"] .library-preview').click();
+  await preview.getByRole('button', { name: '剪辑', exact: true }).click();
+  await expect(save).toBeDisabled();
+  await finish('');
+  await expect(page.getByRole('status').filter({ hasText: '剪辑片段已保存' })).toHaveCount(1);
+  await expect(preview.locator('.info strong')).toHaveText('录像 54 · 录制');
+  await expect(save).toBeEnabled();
+  await expect(page.getByText('剪辑片段已保存')).toHaveCount(0, { timeout: 6000 });
+  await preview.getByRole('button', { name: '取消', exact: true }).click();
+  await preview.getByRole('button', { name: '返回录像列表' }).click();
+  await manager.getByRole('button', { name: '剪辑', exact: true }).click();
+  await manager.locator('[data-recording-id="saved-clip"] .library-preview').click();
+  await expect.poll(() => preview.locator('video').evaluate(video => (video as HTMLVideoElement).currentTime)).toBeGreaterThan(0);
+});
+
+test('共享与录制入口合并设置，默认画质与共享偏好重开后保持', async ({ page }, testInfo) => {
+  const cacheErrors: string[] = [];
+  page.on('console', message => {
+    if (['local content cache unavailable', 'previous account content cache cleanup failed'].includes(message.text())) cacheErrors.push(message.text());
+  });
+  await installRecordingDesktop(page);
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '共享与录制', exact: true }).click();

@@ -45,15 +45,14 @@ function createRecordingEditor({ library, executablePath, onProgress, onDiagnost
         });
         if (task.cancelled) throw new Error('已取消保存片段。');
         await fs.rename(temporary, destination); renamed = true; temporary = null;
+        if (task.cancelled) throw new Error('已取消保存片段。');
         const clip = { id, librarySessionId: source.sessionId, path: destination, kind: 'clip',
-          applicationName: source.applicationName, saved: true, durationMs: endMs - startMs,
+          applicationName: source.applicationName, durationMs: endMs - startMs,
           width: source.width ? source.width & ~1 : null, height: source.height ? source.height & ~1 : null };
-        await library.register(clip); registered = true;
-        await library.finish(clip);
-        const entry = await library.entry(id);
-        return { id, sessionId: source.sessionId, kind: 'clip', applicationName: entry.applicationName,
-          fileName: basename(destination), createdAt: entry.createdAt, durationMs: entry.durationMs,
-          width: entry.width, height: entry.height, bytes: (await fs.stat(destination)).size, state: 'saved', availability: 'available' };
+        const { createdAt, bytes } = await library.register(clip); registered = true;
+        return { id, sessionId: source.sessionId, kind: 'clip', applicationName: clip.applicationName || '',
+          fileName: basename(destination), createdAt, durationMs: clip.durationMs,
+          width: clip.width, height: clip.height, bytes, state: 'saved', availability: 'available' };
       } catch (error) {
         if (error.code === 'ENOENT') throw new Error('剪辑工具或原片不可用，请检查安装与录像文件。');
         if (['ENOSPC', 'EACCES', 'EPERM'].includes(error.code)) throw new Error('无法保存片段，请检查录像目录的空间与写入权限。');

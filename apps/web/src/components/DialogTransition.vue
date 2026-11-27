@@ -35,7 +35,7 @@ function isolate(element: Element) {
   layers.set(surface, layer);
   surface.style.zIndex = String(layer);
   for (const sibling of surface.ownerDocument.body.children) {
-    if (!(sibling instanceof HTMLElement) || sibling === surface) continue;
+    if (!(sibling instanceof HTMLElement) || sibling === surface || sibling.hasAttribute('data-dialog-notice')) continue;
     const current = backgrounds.get(sibling);
     if (current) current.count++;
     else backgrounds.set(sibling, { count: 1, inert: sibling.inert });

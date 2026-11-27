@@ -94,16 +94,38 @@ test('独占预留失败不删除已有半成品或目标文件，也不启动�
   assert.equal(await fs.readFile(f.path, 'utf8'), 'source');
 });
 
-test('自有输出登记失败仍清理半成品和目标，不保留未登记文件', async context => {
+test('进度到 100 后登记成品失败，重开列表仍只有原片且无残留视频', async context => {
   const f = await fixture(context);
-  const editor = createRecordingEditor({ library: { ...f.library, register: async () => { throw new Error('recordingLibraryUnavailable'); } },
-    executablePath: 'isolated.exe', onProgress() {}, spawnProcess() {
+  const library = createRecordingLibrary({ dataDirectory: f.root, isActive: () => false, io: { ...fs,
+    async rename(from, to) {
+      const pending = JSON.parse(await fs.readFile(from, 'utf8'));
+      if (pending.entries.some(entry => entry.kind === 'clip' && entry.state === 'saved')) throw new Error('index write failed');
+      return fs.rename(from, to);
+    },
+  } });
+  const progress = [];
+  const editor = createRecordingEditor({ library, executablePath: 'isolated.exe', onProgress: event => progress.push(event.percent),
+    spawnProcess(_exe, args) {
       const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
-      setImmediate(() => child.emit('close', 0)); return child;
+      void fs.writeFile(args[1], 'completed video').then(() => { child.stdout.write('100\n'); child.emit('close', 0); });
+      return child;
     } });
   await assert.rejects(editor.exportClip(randomUUID(), f.id, 100, 2000), /录像列表未能保存/);
+  assert.deepEqual(progress, [100]);
+  const reopened = createRecordingLibrary({ dataDirectory: f.root, isActive: () => false });
+  assert.deepEqual((await reopened.list()).items.map(entry => entry.id), [f.id]);
   assert.deepEqual((await fs.readdir(f.root)).filter(name => name.endsWith('.partial') || name.endsWith('.mp4')), []);
   assert.equal(await fs.readFile(f.path, 'utf8'), 'source');
+});
+test('磁盘空间不足时报告写入原因并清理临时片段', async context => {
+  const f = await fixture(context);
+  context.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); });
+  const editor = createRecordingEditor({ library: f.library, executablePath: 'isolated.exe', onProgress() {}, spawnProcess() {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    setImmediate(() => child.emit('close', 0)); return child;
+  } });
+  await assert.rejects(editor.exportClip(randomUUID(), f.id, 100, 1000), /空间与写入权限/);
+  assert.deepEqual((await fs.readdir(f.root)).sort(), [basename(f.path), 'recording-library.json'].sort());
 });
 test('原生 FFmpeg 截取合成画面和 AAC，保存新 MP4 并可再次剪辑', { skip: !process.env.LYCANSYNC_TEST_CLIP }, async context => {
   const f = await fixture(context);

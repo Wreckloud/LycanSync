@@ -53,6 +53,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
     <canvas ref="canvas" v-show="ready" aria-hidden="true" />
     <Play v-if="playBadge" class="play-badge" :size="24" aria-hidden="true" />
     <slot v-else-if="!ready && !hideUnavailable"><Film :size="18" aria-hidden="true" /></slot>
+    <slot name="overlay" />
   </span>
 </template>
 

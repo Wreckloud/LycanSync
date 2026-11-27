@@ -1,23 +1,23 @@
 import { onScopeDispose, ref, shallowRef } from 'vue';
 import { forgetRecordingThumbnail } from './recordingThumbnails';
 
-export function useRecordingLibrary() {
+export function useRecordingLibrary(initialKind: 'all' | NonNullable<RecordingLibraryEntry['kind']> = 'all') {
   const desktop = window.lycanDesktop;
   const entries = shallowRef<RecordingLibraryEntry[]>([]);
   const hasMore = ref(false);
   const loading = ref(false);
   const pendingId = ref('');
   const notice = ref('');
-  const kind = ref<'all' | 'recording' | 'replay' | 'clip'>('all');
+  const kind = ref(initialKind);
   let disposed = false;
   let revision = 0;
   let loadedKind = kind.value;
 
-  async function load(append = false) {
+  async function load(append = false, minimumCount = 0) {
     if (!desktop || append && loading.value) return;
     const version = ++revision;
     const requestedKind = kind.value;
-    const targetCount = requestedKind === loadedKind ? entries.value.length : 0;
+    const targetCount = requestedKind === loadedKind ? Math.max(entries.value.length, minimumCount) : 0;
     loading.value = true;
     notice.value = '';
     try {
