@@ -42,6 +42,7 @@ import RecordingShareDialog from './components/settings/RecordingShareDialog.vue
 import { useRecordingShare, RECORDING_SHARE } from './recording/useRecordingShare';
 import { useRecording } from './recording/useRecording';
 import type { ScreenShareQualityId } from './rtc/screenShareQuality';
+import { readScreenShareViewing } from './rtc/screenShareViewing';
 import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
@@ -730,14 +731,31 @@ const localMicrophoneLevel = computed(() => {
 const localInputLevel = computed(() => normalizeVoiceLevel(localMicrophoneLevel.value));
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
-const remotePreviewsPaused = ref(false);
-// 短暂连上就恢复缩略图，会让多路视频重新争用刚恢复的语音链路。
-const PREVIEW_RECOVERY_MS = 30_000;
-watch([() => rtc.room, () => rtc.status], ([room, status], [previousRoom], onCleanup) => {
-  if (!room || room !== previousRoom || status === 'idle') remotePreviewsPaused.value = false;
-  if (room && status === 'reconnecting') remotePreviewsPaused.value = true;
-  if (room && status === 'connected' && remotePreviewsPaused.value) {
-    const timer = setTimeout(() => { remotePreviewsPaused.value = false; }, PREVIEW_RECOVERY_MS);
+const pausedPreviewIdentities = ref<string[]>([]);
+watch([() => rtc.room, () => rtc.status], ([room, status], [previousRoom, previousStatus], onCleanup) => {
+  if (!room || room !== previousRoom || status === 'idle') pausedPreviewIdentities.value = [];
+  if (!room) return;
+  if (status === 'reconnecting') {
+    // 卡片卸载前记住实际可见的共享，恢复时先给这些画面分配带宽。
+    const visible: string[] = [], others: string[] = [];
+    for (const participant of room.remoteParticipants.values()) {
+      const publication = participant.getTrackPublication(Track.Source.ScreenShare);
+      if (!publication) continue;
+      const viewing = readScreenShareViewing(publication);
+      (viewing?.visibleViews ? visible : others).push(participant.identity);
+    }
+    pausedPreviewIdentities.value = [...visible, ...others];
+  } else if (status === 'connected' && room === previousRoom && previousStatus === 'reconnecting') {
+    // 只分批恢复缩略图；聚焦和弹出观看沿用独立的观看需求。
+    function resumeNext() {
+      while (pausedPreviewIdentities.value.length) {
+        const identity = pausedPreviewIdentities.value.shift()!;
+        if (room?.remoteParticipants.get(identity)?.isScreenShareEnabled) break;
+      }
+      if (pausedPreviewIdentities.value.length) timer = setTimeout(resumeNext, 2_000);
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    if (pausedPreviewIdentities.value.length) timer = setTimeout(resumeNext, 1_000);
     onCleanup(() => clearTimeout(timer));
   }
 }, { flush: 'sync' });
@@ -1394,7 +1412,7 @@ function participantListening(participant: Participant) {
           :focused="focusedIdentity === participant.identity" :watching-elsewhere="watchingElsewhere"
           :view-active="visible" :snapshot="diagnosticReport.latest.value"
           :preview-mounted="previewsMounted"
-          :pause-remote-preview="remotePreviewsPaused && participant !== localParticipant"
+          :pause-remote-preview="participant !== localParticipant && (rtc.status === 'reconnecting' || pausedPreviewIdentities.includes(participant.identity))"
           :revision="rtc.revision" :speaker-revision="rtc.speakerRevision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
