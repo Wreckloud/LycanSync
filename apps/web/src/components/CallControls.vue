@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
   gameName?: string; voiceVolumeBalance?: boolean;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
-  microphone: []; listening: []; share: []; prepareShare: []; shareAudio: [enabled: boolean];
+  microphone: []; listening: []; share: []; prepareShare: []; changeSource: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
   settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
   voiceMode: [mode: VoiceMode, opener: HTMLElement]; processing: [enabled: boolean];
@@ -254,7 +254,9 @@ onScopeDispose(() => {
           <header>屏幕共享</header>
           <button v-if="sharing" type="button" class="call-menu-action is-danger" :disabled="shareBusy" @click="toggleShare">
             <MonitorX :size="15" />关闭共享</button>
-          <button v-else-if="desktop && gameName" type="button" class="call-menu-action" :disabled="shareBusy || shareLimitReached"
+          <button v-if="desktop && sharing" type="button" class="call-menu-action" :disabled="shareBusy || recordingBusy || replaySaving || shareAudioRestricted"
+            @click="closeMenu(true); emit('changeSource')"><MonitorUp :size="15" />更改共享画面…</button>
+          <button v-if="desktop && !sharing && gameName" type="button" class="call-menu-action" :disabled="shareBusy || shareLimitReached"
             @click="closeMenu(true); emit('shareGame')"><MonitorUp :size="15" />快速共享 {{ gameName }}</button>
           <button v-if="desktop" type="button" class="call-menu-action" :disabled="recordingBusy || shareBusy || shareAudioRestricted || (!sharing && shareLimitReached)"
             @click="closeMenu(true); sharing ? emit('recording') : emit('shareAndRecord')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : sharing ? '开始录制' : '开始共享并录制' }}</button>

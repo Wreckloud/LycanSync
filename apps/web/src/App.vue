@@ -1293,6 +1293,7 @@ function participantListening(participant: Participant) {
                       @microphone="toggleMicrophone" @listening="toggleListening"
                       @prepare-share="preloadCaptureSources"
                       @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
+                      @change-source="recording.withSourceChange(before => rtc.changeScreenShareSource(before))"
                       @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
                     <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"

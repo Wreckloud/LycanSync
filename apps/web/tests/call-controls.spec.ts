@@ -22,6 +22,7 @@ createApp({ setup() {
     onVoiceMode:mode => {state.voiceMode=mode;}, onProcessing:enabled => {state.processingEnabled=enabled;},
     onInputGain:value => {state.inputGain=value;}, onOutputVolume:value => {state.outputVolume=value;},
     onVoiceVolumeBalance:enabled => {state.voiceVolumeBalance=enabled;},
+    onChangeSource:() => {state.choosingSource=true;},
     onShare:() => {state.sharing=!state.sharing;state.recordingActive=false;}
   })]);
 }}).mount('#root');` });
@@ -99,7 +100,7 @@ test('共享菜单按操作顺序直接展示，画质保留二级调整，未�
   const opener = page.getByRole('button', { name: '共享选项', exact: true });
   await opener.click();
   const menu = page.getByRole('region', { name: '共享选项', exact: true });
-  await expect(menu.getByRole('button')).toHaveText(['关闭共享', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '共享与录制']);
+  await expect(menu.getByRole('button')).toHaveText(['关闭共享', '更改共享画面…', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '共享与录制']);
   await expect(menu.getByRole('checkbox', { name: '共享音频' })).toBeVisible();
   await menu.getByRole('button', { name: '共享画质' }).click();
   const quality = page.getByRole('region', { name: '共享画质', exact: true });
@@ -110,6 +111,11 @@ test('共享菜单按操作顺序直接展示，画质保留二级调整，未�
   await expect(menu.getByRole('button', { name: '共享画质' })).toBeFocused();
   await expect(menu).toHaveCSS('opacity', '1');
   await page.screenshot({ path: testInfo.outputPath('share-menu.png') });
+  await menu.getByRole('button', { name: '更改共享画面…', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消共享选择' })).toBeVisible();
+  await expect(menu).toBeHidden();
+  await page.evaluate(() => { (window as unknown as { quickControlsTest: { choosingSource: boolean } }).quickControlsTest.choosingSource = false; });
+  await opener.click();
   await menu.getByRole('button', { name: '关闭共享', exact: true }).click();
   await opener.click();
   await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '共享画质标准', '共享与录制']);
