@@ -41,7 +41,7 @@ test('桌面真实麦克风连续三次启动、交付和停止，无残留错�
           });
           node.connect(context.createMediaStreamDestination());
           node.port.onmessage = ({ data }) => {
-            if (data?.type === 'accepted') desktop.acknowledgeNativeMicrophoneChunk(sessionId, data.sequence, data.droppedChunks);
+            if (data?.type === 'accepted') desktop.acknowledgeNativeMicrophoneChunk(sessionId, data.sequence, 0, data.droppedChunks);
           };
           removeChunks = desktop.onNativeMicrophoneChunk((chunk) => {
             if (chunk.sessionId !== sessionId) return;

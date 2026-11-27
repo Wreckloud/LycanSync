@@ -647,15 +647,20 @@ test('管道故障导出固定阶段与系统错误，不将原始正文或非�
   const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
   await writeFile(path, [
     { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'writeWait', win32Error: 258,
-      device: 'private-device', message: 'private-message' },
+      hostDroppedChunks: 73, device: 'private-device', message: 'private-message' },
     { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'private-path', win32Error: 5 },
     { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'open', win32Error: -1 },
     { stage: 'microphoneSourceFailed', code: 'microphoneDeviceUnavailable', pipePhase: 'write', win32Error: 5 },
+    { stage: 'microphonePipeReadResumed', maxPipeReadGapMs: 1240, lastMainStallMs: 970, workletDroppedChunks: -1,
+      mainDroppedChunks: 4, raw: 'private-audio' },
   ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
   const events = await readDiagnosticEvents(path, 0, Date.parse(time));
   assert.equal(events[0].pipePhase, 'writeWait'); assert.equal(events[0].win32Error, 258);
   assert.equal(events[1].pipePhase, undefined); assert.equal(events[1].win32Error, undefined);
   assert.equal(events[2].pipePhase, 'open'); assert.equal(events[2].win32Error, undefined);
   assert.equal(events[3].pipePhase, undefined); assert.equal(events[3].win32Error, undefined);
+  assert.equal(events[0].hostDroppedChunks, 73);
+  assert.equal(events[4].maxPipeReadGapMs, 1240); assert.equal(events[4].lastMainStallMs, 970);
+  assert.equal(events[4].mainDroppedChunks, 4); assert.equal(events[4].workletDroppedChunks, undefined);
   assert.doesNotMatch(JSON.stringify(events), /private-/);
 });

@@ -406,17 +406,20 @@ test('音频分包重组保留发言代次，有界队列丢弃最旧块，仅�
   assert.equal(f.messages.length, 1);
   f.capture.acknowledge('other', 1, 0); f.capture.acknowledge('voice-session', 99, 0);
   f.capture.acknowledge('voice-session', 1, -1); assert.equal(f.messages.length, 1);
-  f.capture.acknowledge('voice-session', 1, 5);
+  f.capture.acknowledge('voice-session', 1, 1, 4);
   assert.equal(f.messages[1][1].transmissionEpoch, 3);
-  f.capture.acknowledge('voice-session', 2, 2);
+  f.capture.acknowledge('voice-session', 2, 1);
   assert.equal(f.messages[2][1].transmissionEpoch, 4);
   f.host.getDiagnostics = async () => ({ droppedChunks: 3, sourceState: 1, sourceFrames: 15, framesReceived: 15,
     pushToTalk: true, transmissionAllowed: true, processingMetrics: { samples: 480 } });
   const diagnostic = await f.capture.diagnostics();
   assert.equal(diagnostic.microphoneCaptureDroppedChunks, 10);
+  const delivery = diagnostic.microphoneDelivery;
+  assert.deepEqual([delivery.hostDroppedChunks, delivery.mainDroppedChunks, delivery.rendererDroppedChunks,
+    delivery.workletDroppedChunks, delivery.pipeReadPackets], [3, 2, 1, 4, 15]);
   assert.equal(diagnostic.microphoneCapture.processingMetrics.samples, 480);
   const stopping = f.capture.stop('voice-session');
-  socket.emit('data', microphonePacket()); f.capture.acknowledge('voice-session', 3, 5);
+  socket.emit('data', microphonePacket()); f.capture.acknowledge('voice-session', 3, 1, 4);
   assert.equal(f.messages.length, 3);
   f.stopped(); await stopping;
   assert.equal(socket.destroyed, true);
@@ -431,6 +434,29 @@ test('麦克风停止等待期间不接收迟到的管道连接', async () => {
     assert.equal(socket.destroyed, true);
     assert.equal(f.capture.sessionId, 'voice-session');
   } finally {
+    f.stopped(); await stopping;
+  }
+});
+
+test('管道恢复与故障快照保留主循环停顿和清理前的队列', async () => {
+  const events = [];
+  const f = microphoneBridge({ writeDiagnostic: value => events.push(value) });
+  await startMicrophoneBridge(f);
+  const socket = connectMicrophonePipe(f);
+  try {
+    socket.emit('data', microphonePacket());
+    // 只阻塞独立 Node 测试进程，覆盖心跳回调尚未执行就收到数据或故障的顺序。
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 620);
+    socket.emit('data', microphonePacket());
+    f.capture.notifyFailure('voice-session', 'microphoneCapturePipeFailed');
+    assert.deepEqual(events.map(event => event.stage), ['microphonePipeReadResumed', 'microphoneCaptureFailed']);
+    assert.ok(events[0].lastPipeReadAgeMs >= 500);
+    assert.ok(events[0].lastMainStallMs >= 300);
+    assert.equal(events[1].pipeReadPackets, 2);
+    assert.equal(events[1].queuedChunks, 1);
+    assert.equal(events[1].hostDroppedChunks, null);
+  } finally {
+    const stopping = f.capture.stop('voice-session');
     f.stopped(); await stopping;
   }
 });
@@ -462,7 +488,11 @@ test('停止及换会话期间迟到的诊断不冒充当前采集，统计失�
   finish({ droppedChunks: 100 });
   assert.deepEqual(await diagnostic, { microphoneCapture: null, microphoneCaptureDroppedChunks: null });
   f.host.getDiagnostics = async () => { throw new Error('missing'); };
-  assert.deepEqual(await f.capture.diagnostics(), { microphoneCapture: null, microphoneCaptureDroppedChunks: null });
+  const unknown = await f.capture.diagnostics();
+  assert.equal(unknown.microphoneCapture, null);
+  assert.equal(unknown.microphoneCaptureDroppedChunks, null);
+  assert.equal(unknown.microphoneDelivery.hostDroppedChunks, null);
+  assert.equal(unknown.microphoneDelivery.lastPipeReadAgeMs, null);
   await f.capture.stop('new-session');
 });
 
@@ -627,10 +657,10 @@ test('管道故障保留固定阶段和 Win32 错误，不透传设备或任意�
   const f = fixture(context);
   await f.started();
   f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed', pipePhase: 'writeWait',
-    win32Error: 258, device: 'private-device', message: 'private-message' });
+    win32Error: 258, hostDroppedChunks: 104, device: 'private-device', message: 'private-message' });
   await delay(0);
   assert.deepEqual(f.diagnostics[1], { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed',
-    pipePhase: 'writeWait', win32Error: 258 });
+    pipePhase: 'writeWait', win32Error: 258, hostDroppedChunks: 104 });
   const second = fixture(context);
   await second.started();
   second.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed', pipePhase: 'private-path', win32Error: -1 });

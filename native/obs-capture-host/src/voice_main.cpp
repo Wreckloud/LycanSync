@@ -83,7 +83,7 @@ void event(const char *name, std::string_view fields) {
   const std::lock_guard<std::mutex> lock(output);
   std::cout << "{\"event\":\"" << name << '"' << fields << "}\n" << std::flush;
 }
-void failure_event(std::string_view code, const char *pipe_phase = "", DWORD pipe_error = ERROR_SUCCESS) {
+void failure_event(std::string_view code, const char *pipe_phase = "", DWORD pipe_error = ERROR_SUCCESS, uint64_t dropped = 0) {
   std::string fields = ",\"code\":\"" + std::string(code) + "\"";
   if (const auto result = audio_hresult.load(); result && code != "microphoneCapturePipeFailed") {
     char value[11]{};
@@ -91,6 +91,7 @@ void failure_event(std::string_view code, const char *pipe_phase = "", DWORD pip
     fields += ",\"hresult\":\"" + std::string(value) + "\"";
   }
   if (*pipe_phase) {
+    fields += ",\"hostDroppedChunks\":" + std::to_string(dropped);
     fields += ",\"pipePhase\":\"" + std::string(pipe_phase) + "\"";
     if (pipe_error) fields += ",\"win32Error\":" + std::to_string(pipe_error);
   }
@@ -411,7 +412,7 @@ int capture(int argc, wchar_t **argv) {
   sourceOwner.reset();
   obs_wait_for_destroy_queue();
   if (!failure.empty()) {
-    if (failure == "microphoneCapturePipeFailed" && pipe.failed) failure_event(failure, pipe.failure_phase, pipe.failure_error);
+    if (failure == "microphoneCapturePipeFailed" && pipe.failed) failure_event(failure, pipe.failure_phase, pipe.failure_error, pipe.dropped);
     else failure_event(failure);
     return 1;
   }

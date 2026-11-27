@@ -299,8 +299,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-microphone-frame', listener);
     return () => ipcRenderer.removeListener('media:native-microphone-frame', listener);
   },
-  acknowledgeNativeMicrophoneChunk: (sessionId, sequence, droppedChunks) =>
-    ipcRenderer.send('media:native-microphone:consumed', sessionId, sequence, droppedChunks),
+  acknowledgeNativeMicrophoneChunk: (sessionId, sequence, droppedChunks, workletDropped) =>
+    ipcRenderer.send('media:native-microphone:consumed', sessionId, sequence, droppedChunks, workletDropped),
   onNativeMicrophoneError: (callback) => {
     const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-microphone-error', listener);

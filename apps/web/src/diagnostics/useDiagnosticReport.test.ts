@@ -929,6 +929,10 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
     framesReceived: 200, framesProcessed: 180, obsBridgeDroppedFrames: 20 } as NativeCaptureDiagnostics;
   first.native.microphoneCapture = { sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false };
   Object.assign(first.native.microphoneCapture, { device: 'private-device' });
+  first.native.microphoneDelivery = { pipeReadPackets: 120, lastPipeReadAgeMs: 8, maxPipeReadGapMs: 1250,
+    lastMainStallMs: 1100, lastMainStallAgeMs: 35, hostDroppedChunks: 95, hostDropSampleAgeMs: 0,
+    mainDroppedChunks: 16, rendererDroppedChunks: 3, workletDroppedChunks: 1, queuedChunks: 2 };
+  Object.assign(first.native.microphoneDelivery, { device: 'private-device' });
   first.native.obsRender = { configuration: 1, elapsedMs: 2000, totalFrames: 120, laggedFrames: 0,
     activeFps: 60, averageRenderMs: 1 };
   Object.assign(first.native.obsRender, { windowTitle: 'private-title', luid: 'private-device' });
@@ -957,6 +961,9 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false, processingMetrics: null });
+  expect(result.samples[0].native.microphoneDelivery).toMatchObject({ lastMainStallMs: 1100,
+    hostDroppedChunks: 95, mainDroppedChunks: 16, rendererDroppedChunks: 3, workletDroppedChunks: 1 });
+  expect(result.samples[0].native.microphoneDelivery).not.toHaveProperty('device');
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
     typicalFps: { nativeCapture: 60, nativeProcessed: 45, pageReceived: 42, pageSubmitted: 40,
       encodingLayers: [{ typicalFps: 39 }] } });

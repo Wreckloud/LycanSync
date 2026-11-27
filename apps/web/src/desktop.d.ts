@@ -116,6 +116,12 @@ interface NativeCaptureDiagnostics {
     replay?: Pick<NonNullable<DesktopRecordingStatus['replay']>, 'phase' | 'holdingResources' | 'saving'> };
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number | null;
+  microphoneDelivery?: {
+    pipeReadPackets: number; lastPipeReadAgeMs: number | null; maxPipeReadGapMs: number | null;
+    lastMainStallMs: number | null; lastMainStallAgeMs: number | null;
+    hostDroppedChunks: number | null; hostDropSampleAgeMs: number | null;
+    mainDroppedChunks: number; rendererDroppedChunks: number; workletDroppedChunks: number; queuedChunks: number;
+  };
   microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number;
     pushToTalk?: boolean; transmissionAllowed?: boolean;
     echoMetrics?: { enabled: boolean; active: boolean; referenceFrames: number; resets: number; delayMs: number } | null;
@@ -303,7 +309,7 @@ interface Window {
     stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
     setNativeMicrophoneTransmission(sessionId: string, pushToTalk: boolean, held: boolean, epoch: number): void;
     onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
-    acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
+  acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number, workletDropped?: number): void;
     onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     getNativeMediaDiagnostics(): Promise<NativeCaptureDiagnostics>;
     onActivityChange(callback: (activity: DetectedActivity | null) => void): () => void;

@@ -181,6 +181,9 @@ class ObsAudioHostManager {
         if (event.code === 'microphoneCapturePipeFailed'
             && ['samples', 'open', 'completionEvent', 'write', 'writeWait', 'writeResult', 'shortWrite'].includes(event.pipePhase)) {
           pipeFailure.pipePhase = event.pipePhase;
+          if (Number.isSafeInteger(event.hostDroppedChunks) && event.hostDroppedChunks >= 0) {
+            pipeFailure.hostDroppedChunks = event.hostDroppedChunks;
+          }
           if (Number.isInteger(event.win32Error) && event.win32Error > 0 && event.win32Error <= 0xffffffff) {
             pipeFailure.win32Error = event.win32Error;
           }

@@ -98,7 +98,7 @@ describe('NativeMicrophoneAudioSession', () => {
     expect((message as { pcm: ArrayBuffer }).pcm.byteLength).toBe(480 * 4);
     expect(transfer).toHaveLength(1);
     fakes.port.dispatch({ type: 'accepted', sequence: 3, droppedChunks: 0 });
-    expect(acknowledge).toHaveBeenCalledWith('microphone-session', 3, 0);
+    expect(acknowledge).toHaveBeenCalledWith('microphone-session', 3, 0, 0);
 
     await session.stop();
     await session.stop();
@@ -170,7 +170,7 @@ describe('NativeMicrophoneAudioSession', () => {
       channels: 1, transmissionEpoch: 0, pcm: new Uint8Array(480 * 4) });
     expect(fakes.port.postMessage).toHaveBeenCalledOnce();
     fakes.port.dispatch({ type: 'accepted', sequence: 1, droppedChunks: 0 });
-    expect(acknowledge).toHaveBeenCalledWith('session-b', 1, 0);
+    expect(acknowledge).toHaveBeenCalledWith('session-b', 1, 0, 0);
     await session.stop();
   });
 });

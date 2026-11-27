@@ -24,7 +24,7 @@ export interface NativeMicrophoneDesktopBridge {
   stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
   setNativeMicrophoneTransmission(sessionId: string, pushToTalk: boolean, held: boolean, epoch: number): void;
   onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
-  acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
+  acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number, workletDropped?: number): void;
   onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
 }
 
@@ -127,7 +127,7 @@ export class NativeMicrophoneAudioSession {
         if (!this.stopped && event.data?.type === 'accepted' && Number.isSafeInteger(event.data.sequence)) {
           const workletDropped = Number.isSafeInteger(event.data.droppedChunks) ? event.data.droppedChunks : 0;
           this.desktop.acknowledgeNativeMicrophoneChunk(workletSessionId,
-            event.data.sequence, this.droppedChunks + workletDropped);
+            event.data.sequence, this.droppedChunks, workletDropped);
         }
       };
       await this.context.resume();

@@ -1557,9 +1557,9 @@ ipcMain.handle('media:native-microphone:stop', (event, sessionId) => {
   }
   return nativeMicrophone.stop(sessionId);
 });
-ipcMain.on('media:native-microphone:consumed', (event, sessionId, sequence, droppedChunks) => {
+ipcMain.on('media:native-microphone:consumed', (event, sessionId, sequence, droppedChunks, workletDropped) => {
   if (!trustedSender(event)) return;
-  nativeMicrophone.acknowledge(sessionId, sequence, droppedChunks);
+  nativeMicrophone.acknowledge(sessionId, sequence, droppedChunks, workletDropped);
 });
 ipcMain.on('media:native-video:receiver-error', (event, failure) => {
   if (!trustedSender(event) || !nativeVideo.current || nativeVideo.current.stopping

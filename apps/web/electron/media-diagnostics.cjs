@@ -169,8 +169,15 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (stage === 'microphoneSourceFailed' && entry.code === 'microphoneCapturePipeFailed'
             && ['samples', 'open', 'completionEvent', 'write', 'writeWait', 'writeResult', 'shortWrite'].includes(entry.pipePhase)) {
           details.pipePhase = entry.pipePhase;
+          if (Number.isSafeInteger(entry.hostDroppedChunks) && entry.hostDroppedChunks >= 0) details.hostDroppedChunks = entry.hostDroppedChunks;
           if (Number.isInteger(entry.win32Error) && entry.win32Error > 0 && entry.win32Error <= 0xffffffff) {
             details.win32Error = entry.win32Error;
+          }
+        }
+        if (stage === 'microphoneCaptureFailed' || stage === 'microphonePipeReadResumed') {
+          for (const key of ['pipeReadPackets', 'lastPipeReadAgeMs', 'maxPipeReadGapMs', 'lastMainStallMs', 'lastMainStallAgeMs',
+            'hostDroppedChunks', 'hostDropSampleAgeMs', 'mainDroppedChunks', 'rendererDroppedChunks', 'workletDroppedChunks', 'queuedChunks']) {
+            if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
           }
         }
         if (stage === 'microphoneEchoState' && ['disabled', 'pending', 'ready', 'unavailable'].includes(entry.status)) {

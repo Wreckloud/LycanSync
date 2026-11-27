@@ -2,6 +2,23 @@ const { createServer } = require('node:net');
 const { randomUUID } = require('node:crypto');
 
 const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
+const LOOP_SAMPLE_MS = 250;
+
+function microphoneDelivery(audio, now = performance.now()) {
+  const overdue = Math.max(0, Math.round(now - audio.loopTick - LOOP_SAMPLE_MS));
+  const pendingStall = overdue >= 100;
+  return {
+    pipeReadPackets: audio.pipeReadPackets,
+    lastPipeReadAgeMs: audio.lastRead === null ? null : Math.round(now - audio.lastRead),
+    maxPipeReadGapMs: audio.maxReadGap,
+    lastMainStallMs: pendingStall ? overdue : audio.lastStallMs,
+    lastMainStallAgeMs: pendingStall ? 0 : audio.lastStallAt === null ? null : Math.round(now - audio.lastStallAt),
+    hostDroppedChunks: audio.hostDroppedChunks,
+    hostDropSampleAgeMs: audio.hostSampleAt === null ? null : Math.round(now - audio.hostSampleAt),
+    mainDroppedChunks: audio.droppedChunks, rendererDroppedChunks: audio.rendererDroppedChunks,
+    workletDroppedChunks: audio.workletDroppedChunks, queuedChunks: audio.queue.length,
+  };
+}
 
 function validMicrophoneSettings(settings) {
   return settings && typeof settings === 'object' && !Array.isArray(settings)
@@ -21,6 +38,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
   let lastMicrophoneDroppedChunks = 0;
   function finishNativeMicrophonePipe(audio, { destroy = false } = {}) {
     if (!audio) return;
+    clearInterval(audio.loopTimer);
     audio.stopping = true;
     audio.queue.length = 0;
     audio.inFlight = undefined;
@@ -33,6 +51,11 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
 
   function handleNativeMicrophonePipeData(audio, incoming) {
     if (nativeMicrophoneSession !== audio || audio.stopping) return;
+    const now = performance.now();
+    const gap = audio.lastRead === null ? null : Math.round(now - audio.lastRead);
+    if (gap !== null) audio.maxReadGap = Math.max(audio.maxReadGap ?? 0, gap);
+    if (gap >= 500) void writeMediaDiagnostic({ stage: 'microphonePipeReadResumed', ...microphoneDelivery(audio, now) });
+    audio.lastRead = now;
     audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
     while (audio.buffer.length >= 8) {
       const frames = audio.buffer.readUInt32LE(0);
@@ -43,6 +66,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
       }
       const packetBytes = 8 + frames * 4;
       if (audio.buffer.length < packetBytes) break;
+      audio.pipeReadPackets++;
       const pcm = Uint8Array.from(audio.buffer.subarray(8, packetBytes));
       audio.buffer = audio.buffer.subarray(packetBytes);
       if (audio.queue.length === 12) {
@@ -70,12 +94,14 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     });
   }
 
-  function acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks) {
+  function acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks, workletDropped = 0) {
     if (!validNativeAudioSessionId(sessionId) || !Number.isSafeInteger(sequence)
-        || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
+        || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0
+        || !Number.isSafeInteger(workletDropped) || workletDropped < 0) return;
     const audio = nativeMicrophoneSession;
     if (!audio || audio.sessionId !== sessionId || audio.inFlight !== sequence) return;
     audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
+    audio.workletDroppedChunks = Math.max(audio.workletDroppedChunks, workletDropped);
     audio.inFlight = undefined;
     sendNextNativeMicrophoneChunk(audio);
   }
@@ -84,7 +110,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     if (!audio || nativeMicrophoneSession !== audio || audio.failureNotified || audio.stopping) return;
     audio.failureNotified = true;
     const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'microphoneCaptureFailed';
-    void writeMediaDiagnostic({ stage: 'microphoneCaptureFailed', code: safeCode });
+    void writeMediaDiagnostic({ stage: 'microphoneCaptureFailed', code: safeCode, ...microphoneDelivery(audio) });
     finishNativeMicrophonePipe(audio, { destroy: true });
     const mainWindow = getWindow();
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
@@ -112,7 +138,17 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
       sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
       inFlight: undefined, sequence: 0, droppedChunks: 0, rendererDroppedChunks: 0,
       stopping: false, failureNotified: false, hostDroppedChunks: null, hostStarted: false,
+      hostSampleAt: null, pipeReadPackets: 0, lastRead: null, maxReadGap: null, workletDroppedChunks: 0,
+      loopTick: performance.now(), lastStallMs: null, lastStallAt: null,
     };
+    // 单调时钟用来区分主进程调度停顿与单独的管道断流；只在本次采集期间采样。
+    audio.loopTimer = setInterval(() => {
+      const now = performance.now();
+      const late = Math.round(now - audio.loopTick - LOOP_SAMPLE_MS);
+      audio.loopTick = now;
+      if (late >= 100) { audio.lastStallMs = late; audio.lastStallAt = now; }
+    }, LOOP_SAMPLE_MS);
+    audio.loopTimer.unref();
     nativeMicrophoneSession = audio;
     server.on('connection', (socket) => {
       if (nativeMicrophoneSession !== audio || audio.stopping || audio.socket) { socket.destroy(); return; }
@@ -172,12 +208,13 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     audio.stopPromise = (async () => {
       // 立即撤销页面交付，但保持管道排空至宿主停止，避免正常停止被误报为写管道故障。
       audio.stopping = true;
+      clearInterval(audio.loopTimer);
       audio.queue.length = 0;
       try { return audio.hostStarted ? await obsAudioHost.stop(sessionId) : { changed: false }; }
       finally { finishNativeMicrophonePipe(audio, { destroy: true }); }
     })().then(result => {
       lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
-        : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
+        : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks + audio.workletDroppedChunks;
       if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
       return result;
     }).catch(error => {
@@ -203,12 +240,16 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
             processingMetrics: capture.processingMetrics, echoMetrics: capture.echoMetrics };
         }
         microphone.hostDroppedChunks = microphoneDrops;
+        microphone.hostSampleAt = performance.now();
       } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }
       if (nativeMicrophoneSession !== microphone) microphoneDrops = null;
     }
     diagnostics.microphoneCaptureDroppedChunks = microphone
-      ? microphoneDrops === null ? null : microphoneDrops + microphone.droppedChunks + microphone.rendererDroppedChunks
+      ? microphoneDrops === null ? null : microphoneDrops + microphone.droppedChunks + microphone.rendererDroppedChunks + microphone.workletDroppedChunks
       : lastMicrophoneDroppedChunks;
+    if (microphone && nativeMicrophoneSession === microphone && !microphone.stopping) {
+      diagnostics.microphoneDelivery = microphoneDelivery(microphone);
+    }
     return diagnostics;
   }
 
