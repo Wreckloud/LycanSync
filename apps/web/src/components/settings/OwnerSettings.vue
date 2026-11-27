@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, useId, watch } from 'vue';
+import { ref, useId, watch } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 import ExpandSection from '../ExpandSection.vue';
-import { authenticatedFetch, authRequest, readApiError } from '../../auth/authApi';
+import { authRequest } from '../../auth/authApi';
 import { useSettingsRead } from '../../settings/useSettingsRead';
 import InlineFeedback from '../InlineFeedback.vue';
 import { useLoadingHint } from '../useLoadingHint';
@@ -10,9 +10,10 @@ import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import MemberAccessSettings from './MemberAccessSettings.vue';
 import UploadSettings from './UploadSettings.vue';
 import QqLoginSettings from './QqLoginSettings.vue';
-import ReceivedDiagnosticReports, { type ReceivedReport } from './ReceivedDiagnosticReports.vue';
+import DialogTransition from '../DialogTransition.vue';
+import ReceivedDiagnosticReports from './ReceivedDiagnosticReports.vue';
 
-const props = defineProps<{ active: boolean; leaving: boolean }>();
+const props = defineProps<{ active: boolean; leaving: boolean; userId: string }>();
 const emit = defineEmits<{ notice: [message: string]; qqSettingsSaved: [] }>();
 interface ServerSettingsStatus {
   serverName: string;
@@ -26,58 +27,38 @@ const summary = useSettingsRead(signal => authRequest<ServerSettingsStatus>('ser
   '无法读取服务器配置状态', revokeAccess);
 const { value: status, error, loading } = summary;
 const readingSummary = useLoadingHint(() => props.active && loading.value && !status.value);
-const reports = useSettingsRead(async signal => {
-  const response = await authenticatedFetch('/api/diagnostics/reports', { signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) });
-  if (!response.ok) throw await readApiError(response);
-  return await response.json() as ReceivedReport[];
-}, '无法读取日志列表', revokeAccess);
-const { value: entries, loading: readingReports, error: reportsError } = reports;
-
+const inboxOpen = ref(false);
+const inboxButton = ref<HTMLButtonElement>();
 function revokeAccess(message: string) {
   summary.clear();
-  reports.clear();
+  inboxOpen.value = false;
   advancedOpen.value = false;
   accessError.value = message;
 }
-
 async function refreshOwner() {
-  await Promise.all([summary.refresh(), reports.refresh()]);
-  if (status.value && entries.value && !error.value && !reportsError.value) accessError.value = '';
+  await summary.refresh();
+  if (status.value && !error.value) accessError.value = '';
 }
-
-let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-let disposed = false;
-function scheduleReports() {
-  clearTimeout(refreshTimer);
-  if (disposed || !props.active || accessError.value || document.hidden) return;
-  refreshTimer = setTimeout(() => { void reports.refresh().then(scheduleReports); }, reportsError.value ? 30_000 : 5_000);
-}
-function visibilityChanged() {
-  clearTimeout(refreshTimer);
-  if (props.active && !document.hidden && !accessError.value) void reports.refresh().then(scheduleReports);
-}
-document.addEventListener('visibilitychange', visibilityChanged);
-onScopeDispose(() => {
-  disposed = true;
-  clearTimeout(refreshTimer);
-  document.removeEventListener('visibilitychange', visibilityChanged);
-});
-watch(() => [props.active, accessError.value], () => scheduleReports(), { immediate: true });
-watch(() => props.active, (active) => {
+watch(() => props.active, active => {
   if (active) void refreshOwner();
-  else advancedOpen.value = false;
+  else { advancedOpen.value = false; inboxOpen.value = false; }
 }, { immediate: true });
 </script>
 
 <template>
   <section v-if="active && accessError" class="settings-section">
-    <InlineFeedback :message="error || reportsError || accessError" />
-    <button type="button" class="settings-button" :disabled="loading || readingReports" @click="refreshOwner">重试</button>
+    <InlineFeedback :message="error || accessError" />
+    <button type="button" class="settings-button" :disabled="loading" @click="refreshOwner">重试</button>
   </section>
   <section v-else-if="active" class="settings-section owner-settings">
     <MemberAccessSettings :active="active" @notice="emit('notice', $event)" />
-    <ReceivedDiagnosticReports :entries="entries" :loading="readingReports" :read-error="reportsError"
-      @denied="revokeAccess" />
+    <section class="settings-block">
+      <h2>日志管理</h2>
+      <button ref="inboxButton" class="settings-button" @click="inboxOpen = true">打开日志管理器</button>
+    </section>
+    <DialogTransition :focus-fallback="inboxButton">
+      <ReceivedDiagnosticReports v-if="inboxOpen" :user-id="userId" @close="inboxOpen = false" @denied="revokeAccess" />
+    </DialogTransition>
     <section class="settings-block">
       <h2>服务器配置</h2>
       <dl class="owner-status" :aria-busy="loading && !status">

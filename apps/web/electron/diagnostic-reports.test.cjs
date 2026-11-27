@@ -2,7 +2,8 @@ const assert = require('node:assert/strict');
 const { mkdir, mkdtemp, readFile, rename, rm, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, locateReceivedReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
+const { createDiagnosticCopies } = require('./diagnostic-copies.cjs');
 const { readFileSync } = require('node:fs');
 const { runInNewContext } = require('node:vm');
 
@@ -164,7 +165,8 @@ function ipcFixture() {
     gzipReport: require('node:util').promisify(require('node:zlib').gzip),
     trustedSender: event => event.trusted, parseDiagnosticReport, compactSavedSamples,
     writeMediaDiagnostic: Object.assign(async entry => failures.push(entry), { flush: async () => {} }),
-    Date, JSON, Error, resolve, mainWindow: {},
+    Date, JSON, Error, resolve, mainWindow: {}, sessionRevision: 1, AbortController, diagnosticFileTask: undefined,
+    diagnosticCopies: { async submit(json, check) { check(); const path = '/managed/report.json'; await state.writeFile(path, json); return path; } },
     process: { platform: 'win32', arch: 'x64', versions: { electron: 'current-electron' } }, osRelease: () => 'current-os',
     app: { getPath: () => '/private', getVersion: () => 'current-version', getGPUFeatureStatus: () => ({}) },
     readDiagnosticEvents: async () => [{ stage: 'current-start' }],
@@ -176,7 +178,7 @@ function ipcFixture() {
       dialogOptions.push(options); return { canceled: false, filePath: '/selected/report.json' };
     } },
     writeFile: async (path, text) => writes.push({ path, report: JSON.parse(text) }),
-    ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
+    ipcMain: { on: (name, callback) => handlers.set(name, callback), handle: (name, callback) => handlers.set(name, callback) },
   };
   runInNewContext(source.slice(start, end), state);
   return { state, handlers, saved, writes, exportDirectories, dialogOptions, failures, cleared: () => cleared };
@@ -226,44 +228,64 @@ test('本地副本无法写入时仍能上传，并明确返回保存结果', as
   assert.equal(JSON.parse(require('node:zlib').gunzipSync(result.gzip)).kind, 'lycansync-diagnostics');
 });
 
-test('服主接收完整 JSON 到固定目录，短响应和无效标识不覆盖旧报告', async t => {
+test('报告只有打开时才下载，重复打开复用本地文件，删除后不再自动写回', async t => {
   const { directory } = await fixture(t);
   const f = ipcFixture();
   const id = '30122072-cabb-4be1-89ab-a49351c83457';
   const json = report('联测');
-  Object.assign(f.state, { sessionRevision: 1, sessionToken: 'test', APP_ORIGIN: 'lycan://app', AbortSignal, Request,
-    reportIdPattern, receivedReportPath, dirname: require('node:path').dirname,
-    app: { getPath: () => directory }, mkdir, saveChatDownload: require('./chat-download.cjs').saveChatDownload,
-    serveApplication: async request => { assert.equal(request.url, 'lycan://app/api/diagnostics/reports/' + id); return new Response(json); } });
-  const receive = f.handlers.get('diagnostics:receive');
-  const trusted = { trusted: true };
-  const size = Buffer.byteLength(json);
-  const path = await receive(trusted, id, size);
-  assert.equal(path, join(directory, 'exports', 'received', 'LycanSync-diagnostics-' + id + '.json'));
-  assert.equal(await readFile(path, 'utf8'), json);
-  const archive = join(directory, 'exports', 'received');
-  const userId = '640d8632-a8af-44dc-ad96-15418a6b2f51';
-  const uploadedAt = '2026-11-26T20:30:00Z';
-  const entry = { id, userId, uploadedAt, byteSize: size };
-  assert.equal(await locateReceivedReport(archive, entry), path);
-  assert.equal(await locateReceivedReport(archive, { ...entry, byteSize: size + 1 }), null);
-  await assert.rejects(receive(trusted, id, size, '../outside', uploadedAt), /无效/);
-  const grouped = await receive(trusted, id, size, userId, uploadedAt);
-  assert.equal(grouped, join(archive, userId, new Date(uploadedAt).toLocaleDateString('sv-SE'), 'LycanSync-diagnostics-' + id + '.json'));
-  assert.equal(await locateReceivedReport(archive, entry), grouped);
-  let revealed;
-  f.state.shell = { showItemInFolder: file => { revealed = file; } };
-  const reveal = f.handlers.get('diagnostics:reveal');
-  f.state.serveApplication = async () => Response.json([{ ...entry, savedPath: grouped }]);
-  await reveal(trusted, id);
-  assert.equal(revealed, grouped);
-  f.state.serveApplication = async () => new Response(null, { status: 403 });
-  await assert.rejects(reveal(trusted, id), /服主权限/);
-  f.state.serveApplication = async () => new Response('{');
-  await assert.rejects(receive(trusted, id, size), /完整下载/);
-  await assert.rejects(receive(trusted, '../test', size), /无效/);
-  await assert.rejects(receive({ trusted: false }, id, size), /无效/);
-  assert.equal(await readFile(path, 'utf8'), json);
+  const entry = { id, userId: '640d8632-a8af-44dc-ad96-15418a6b2f51', uploadedAt: '2026-11-26T20:30:00Z', byteSize: Buffer.byteLength(json) };
+  let downloads = 0, revealed, short = false, allowed = true;
+  const copies = createDiagnosticCopies(directory);
+  Object.assign(f.state, { APP_ORIGIN: 'lycan://app', AbortSignal, Request, reportIdPattern, diagnosticCopies: copies,
+    shell: { showItemInFolder: path => { revealed = path; } },
+    serveApplication: async request => {
+      if (!allowed) return new Response(null, { status: 403 });
+      if (request.url.endsWith('/reports')) return Response.json([entry]);
+      assert.ok(request.url.endsWith('/' + id)); downloads++; return new Response(short ? '{' : json);
+    } });
+  const file = action => f.handlers.get('diagnostics:file')({ trusted: true }, id, action);
+  await file('open'); await file('open');
+  assert.equal(downloads, 1); assert.equal(await readFile(revealed, 'utf8'), json);
+  const old = receivedReportPath(join(directory, 'exports', 'received'), id);
+  await writeFile(old, json);
+  allowed = false; await assert.rejects(file('delete'), /权限/); allowed = true;
+  await file('delete'); assert.equal(await copies.locate(entry), null);
+  await copies.clean(); assert.equal(downloads, 1);
+  short = true; await assert.rejects(file('open'), /完整下载/); assert.equal(await copies.locate(entry), null);
+  await assert.rejects(f.handlers.get('diagnostics:file')({ trusted: false }, id, 'open'), /无效/);
+  await writeFile(old, json); await file('open'); assert.equal(revealed, old); assert.equal(downloads, 2);
+});
+
+test('自动副本按三天和合计容量清理，保护导出、未知文件和其他目录', async t => {
+  const { directory } = await fixture(t);
+  const copies = createDiagnosticCopies(directory);
+  const { utimes, truncate, symlink } = require('node:fs/promises');
+  const make = () => copies.submit('{}', () => {});
+  const first = await make(), second = await make();
+  await truncate(first, 70 * 1024 * 1024);
+  await truncate(second, 70 * 1024 * 1024);
+  const yesterday = new Date(Date.now() - 86400000);
+  await utimes(first, yesterday, yesterday);
+  await copies.clean(); await assert.rejects(readFile(first), { code: 'ENOENT' });
+  const old = new Date(Date.now() - 4 * 86400000);
+  await utimes(second, old, old);
+  const managed = join(directory, 'diagnostics', 'submitted');
+  const other = join(managed, 'keep.json'); await writeFile(other, 'keep'); await utimes(other, old, old);
+  const exported = join(directory, 'exports'); await mkdir(exported, { recursive: true });
+  const manual = join(exported, 'LycanSync-diagnostics-12345.json'); await writeFile(manual, 'manual'); await utimes(manual, old, old);
+  const archive = join(exported, 'received'); await mkdir(archive);
+  const userFolder = join(archive, '217e00df-f909-4cde-a9a8-dcd2a44ab151');
+  await mkdir(userFolder);
+  const misplaced = receivedReportPath(userFolder, '640d8632-a8af-44dc-ad96-15418a6b2f51');
+  await writeFile(misplaced, 'keep'); await utimes(misplaced, old, old);
+  const external = join(directory, 'external'); await mkdir(external);
+  const outside = receivedReportPath(external, '640d8632-a8af-44dc-ad96-15418a6b2f51'); await writeFile(outside, 'outside'); await utimes(outside, old, old);
+  await symlink(external, join(archive, '640d8632-a8af-44dc-ad96-15418a6b2f51'), process.platform === 'win32' ? 'junction' : 'dir');
+  await copies.clean();
+  await assert.rejects(readFile(second), { code: 'ENOENT' });
+  assert.equal(await readFile(other, 'utf8'), 'keep'); assert.equal(await readFile(manual, 'utf8'), 'manual');
+  assert.equal(await readFile(outside, 'utf8'), 'outside');
+  assert.equal(await readFile(misplaced, 'utf8'), 'keep');
 });
 
 test('保存只接受可信页面且不落盘体验说明，上次导出不混入本次环境或事件', async () => {

@@ -56,6 +56,7 @@ module.exports = {
     'electron/recording-voice.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',
+    'electron/diagnostic-copies.cjs',
     'electron/save-directories.cjs',
     'electron/native-video-thumbnails.cjs',
     'electron/native-window-thumbnails.cjs',

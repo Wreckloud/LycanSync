@@ -1,4 +1,4 @@
-const { mkdir, open, rename, stat, unlink, writeFile } = require('node:fs/promises');
+const { mkdir, open, rename, unlink, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
 const { isDeepStrictEqual } = require('node:util');
@@ -12,18 +12,6 @@ function receivedReportPath(directory, id, userId, uploadedAt) {
   if (userId == null) return join(directory, name);
   if (typeof userId !== 'string' || !reportIdPattern.test(userId) || !Number.isFinite(Date.parse(uploadedAt))) throw new Error('日志归档信息无效。');
   return join(directory, userId, new Date(uploadedAt).toLocaleDateString('sv-SE'), name);
-}
-
-async function locateReceivedReport(directory, entry) {
-  const path = receivedReportPath(directory, entry.id, entry.userId, entry.uploadedAt);
-  // 旧版已手动接收的平铺文件继续使用，避免重新下载。
-  for (const candidate of new Set([path, receivedReportPath(directory, entry.id)])) {
-    try {
-      const file = await stat(candidate);
-      if (file.isFile() && file.size === entry.byteSize) return candidate;
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  return null;
 }
 
 function parseDiagnosticReport(text) {
@@ -208,4 +196,4 @@ function createDiagnosticReportStore(directory) {
   };
 }
 
-module.exports = { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, locateReceivedReport, receivedReportPath, reportIdPattern };
+module.exports = { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, receivedReportPath, reportIdPattern };

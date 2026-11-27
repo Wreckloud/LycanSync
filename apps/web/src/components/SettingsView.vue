@@ -144,7 +144,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
       <div class="settings-content">
         <p v-if="sectionDescription" :key="activeSection" class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
         <div v-if="user.administrator" v-show="activeSection === 'members'" class="owner-settings-page">
-          <OwnerSettings :key="user.id" @notice="emit('notice', $event)" @qq-settings-saved="accountSettings?.bindingChanged()"
+          <OwnerSettings :key="user.id" :user-id="user.id" @notice="emit('notice', $event)" @qq-settings-saved="accountSettings?.bindingChanged()"
             :active="activeSection === 'members'" :leaving="leaving" />
         </div>
         <div v-show="activeSection === 'account'" class="settings-account-page">

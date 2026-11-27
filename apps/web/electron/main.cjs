@@ -14,6 +14,7 @@ const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 const { createApplicationAudioSources } = require('./application-audio-sources.cjs');
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
+const { createDiagnosticCopies } = require('./diagnostic-copies.cjs');
 const { createSaveDirectories } = require('./save-directories.cjs');
 const { createRecording } = require('./recording.cjs');
 const { saveChatDownload } = require('./chat-download.cjs');
@@ -25,7 +26,7 @@ const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, locateReceivedReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { createWindowThumbnailLoader } = require('./native-window-thumbnails.cjs');
@@ -193,6 +194,8 @@ const windowThumbnails = createWindowThumbnailLoader({ executablePath: mediaHelp
   onTiming: entry => { void writeMediaDiagnostic(entry); } });
 app.on('will-quit', () => windowThumbnails.dispose());
 const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
+const diagnosticCopies = createDiagnosticCopies(app.getPath('userData'));
+let diagnosticFileTask;
 let diagnosticReportsGeneration = 0;
 const diagnosticStartedAt = Date.now();
 // 保留阶段计时；另记 Node 初始化后的运行时间，补齐更早的模块加载，不代替外部启动计时。
@@ -533,6 +536,7 @@ async function saveSession(token, accountId) {
 async function clearSession() {
   cancelChatDownloads();
   sessionRevision++;
+  diagnosticFileTask?.abort();
   sessionToken = undefined;
   sessionLoaded = true;
   try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
@@ -550,6 +554,7 @@ async function clearSession() {
 function clearAccountSession() {
   if (sessionClearTask) return sessionClearTask;
   sessionRevision++;
+  diagnosticFileTask?.abort();
   sessionClearTask = (async () => {
     await returnToAccountEntry();
     await clearSession();
@@ -730,9 +735,8 @@ async function serveApplication(request) {
       }
       if (request.method === 'GET' && url.pathname === '/api/diagnostics/reports' && response.ok) {
         failureMessage = '无法核对已接收的日志，请检查日志目录。';
-        const directory = resolve(app.getPath('userData'), 'exports', 'received');
         const entries = await response.json();
-        const listed = await Promise.all(entries.map(async entry => ({ ...entry, savedPath: await locateReceivedReport(directory, entry) })));
+        const listed = await Promise.all(entries.map(async entry => ({ ...entry, savedPath: await diagnosticCopies.locate(entry) })));
         if (!token || token !== sessionToken) return Response.json({ detail: '登录状态已变化。' }, { status: 403 });
         return Response.json(listed, { headers: { 'Cache-Control': 'no-store' } });
       }
@@ -1071,6 +1075,7 @@ async function prepareDiagnosticReport(event, text, upload) {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   const report = parseDiagnosticReport(text);
   diagnosticExportPending = true;
+  const revision = sessionRevision;
   try {
     await writeMediaDiagnostic.flush();
     const eventStartedAt = Math.min(diagnosticStartedAt, Date.parse(report.startedAt));
@@ -1092,11 +1097,17 @@ async function prepareDiagnosticReport(event, text, upload) {
     const json = JSON.stringify(report);
     let filePath;
     try {
-      const directory = await saveDirectories.exportDirectory();
-      filePath = resolve(directory, `LycanSync-diagnostics-${Date.now()}.json`);
-      await mkdir(directory, { recursive: true });
-      if (!trustedSender(event) || closing) return { saved: false };
-      await writeFile(filePath, json, { encoding: 'utf8', flag: 'wx' });
+      if (upload) {
+        filePath = await diagnosticCopies.submit(json, () => {
+          if (closing || !trustedSender(event) || revision !== sessionRevision) throw new Error('登录状态已变化。');
+        });
+      } else {
+        const directory = await saveDirectories.exportDirectory();
+        filePath = resolve(directory, `LycanSync-diagnostics-${Date.now()}.json`);
+        await mkdir(directory, { recursive: true });
+        if (!trustedSender(event) || closing) return { saved: false };
+        await writeFile(filePath, json, { encoding: 'utf8', flag: 'wx' });
+      }
     } catch (error) {
       if (!upload) throw error;
       // 本机目录不可写时仍可交给服主，调用方分别提示两个结果。
@@ -1108,39 +1119,35 @@ async function prepareDiagnosticReport(event, text, upload) {
 }
 ipcMain.handle('diagnostics:export', (event, text) => prepareDiagnosticReport(event, text, false));
 ipcMain.handle('diagnostics:prepare-upload', (event, text) => prepareDiagnosticReport(event, text, true));
-const receivingReports = new Map();
-ipcMain.handle('diagnostics:receive', async (event, id, size, userId, uploadedAt) => {
-  if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id) || !Number.isSafeInteger(size) || size <= 0 || size > 40 * 1024 * 1024) {
-    throw new Error('报告信息无效，请刷新列表。');
-  }
-  const revision = sessionRevision;
-  const directory = resolve(app.getPath('userData'), 'exports', 'received');
-  const filePath = receivedReportPath(directory, id, userId, uploadedAt);
-  const key = revision + ':' + id;
-  if (receivingReports.has(key)) return receivingReports.get(key);
-  const task = (async () => {
-    const signal = AbortSignal.timeout(30 * 60_000);
-    const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports/' + id, { signal }));
-    const checkSession = () => {
-      if (closing || revision !== sessionRevision || !trustedSender(event)) throw new Error('接收已中止，登录状态已变化。');
-    };
-    checkSession();
-    if (!response.ok) throw new Error('无法接收报告，请确认日志仍在且拥有服主权限。');
-    await mkdir(dirname(filePath), { recursive: true });
-    await saveChatDownload(filePath, response, size, signal, checkSession);
-    return filePath;
-  })();
-  receivingReports.set(key, task);
-  try { return await task; } finally { receivingReports.delete(key); }
+ipcMain.handle('diagnostics:clean-copies', event => {
+  if (!trustedSender(event) || closing) throw new Error('无法清理日志副本。');
+  return diagnosticCopies.clean();
 });
-ipcMain.handle('diagnostics:reveal', async (event, id) => {
-  if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id)) throw new Error('日志标识无效。');
+ipcMain.on('diagnostics:cancel-file', event => {
+  if (trustedSender(event)) diagnosticFileTask?.abort();
+});
+ipcMain.handle('diagnostics:file', async (event, id, action) => {
+  if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id) || !['open', 'delete'].includes(action)) throw new Error('日志操作无效。');
+  if (diagnosticFileTask) throw new Error('请等待当前日志操作完成。');
   const revision = sessionRevision;
-  const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports'));
-  if (!response.ok) throw new Error('无法读取日志，请确认服主权限。');
-  const entry = (await response.json()).find(item => item.id === id);
-  if (!entry?.savedPath || closing || revision !== sessionRevision || !trustedSender(event)) throw new Error('日志已移除或尚未接收。');
-  shell.showItemInFolder(entry.savedPath);
+  const controller = diagnosticFileTask = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60_000)]);
+  const ensureCurrent = () => {
+    signal.throwIfAborted();
+    if (closing || revision !== sessionRevision || !trustedSender(event)) throw new Error('登录状态已变化。');
+  };
+  try {
+    const url = APP_ORIGIN + '/api/diagnostics/reports';
+    const response = await serveApplication(new Request(url, { signal }));
+    if (!response.ok) throw new Error('无法读取报告，请确认仍拥有服主权限。');
+    const entry = (await response.json()).find(item => item.id === id);
+    ensureCurrent();
+    if (!entry || !Number.isSafeInteger(entry.byteSize) || entry.byteSize <= 0 || entry.byteSize > 40 * 1024 * 1024) throw new Error('报告已移除或信息无效。');
+    if (action === 'delete') return await diagnosticCopies.remove(entry, ensureCurrent);
+    const path = await diagnosticCopies.open(entry, () => serveApplication(new Request(url + '/' + id, { signal })), signal, ensureCurrent);
+    ensureCurrent();
+    shell.showItemInFolder(path);
+  } finally { diagnosticFileTask = undefined; }
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

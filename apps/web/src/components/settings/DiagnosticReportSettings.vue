@@ -57,7 +57,7 @@ function updateAutomatic(event: Event) {
           <div><strong>本地导出</strong><small>保存一份 JSON 报告，供自己查看。</small></div>
           <button type="button" class="settings-button settings-control" :disabled="deliveryDisabled" @click="report.save(notes)">导出全部报告</button>
         </div>
-        <SaveDirectorySetting v-if="desktop && active && moreOpen" kind="diagnostics" label="日志保存位置" :disabled="saving" />
+        <SaveDirectorySetting v-if="desktop && active && moreOpen" kind="diagnostics" label="手动导出位置" :disabled="saving" />
         <div class="settings-action-row">
           <div><strong>问题标记</strong><small>标出刚才发生问题的时刻。</small>
             <small v-if="report.problemMarkers?.value.length">最近标记：{{ new Date(report.problemMarkers.value.at(-1)!.time).toLocaleTimeString() }}</small>

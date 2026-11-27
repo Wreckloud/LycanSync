@@ -543,7 +543,7 @@ function exportFixture() {
   assert.ok(start >= 0 && end > start);
   let exportReport;
   const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0, exportDirectory: null, dialogOptions: null };
-  const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true, parseDiagnosticReport,
+  const state = { closing: false, sessionRevision: 0, diagnosticExportPending: false, trustedSender: () => true, parseDiagnosticReport,
     saveDirectories: { exportDirectory: async () => join('/private', 'exports') },
     diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
     savedDiagnosticReports: { all: async () => ({ reports: {}, unavailable: [] }) },
@@ -558,7 +558,7 @@ function exportFixture() {
       calls.dialog++; calls.dialogOptions = options; return { canceled: false, filePath: '/selected/report.json' };
     } },
     writeFile: async (...args) => { calls.writes.push(args); },
-    ipcMain: { handle: (name, callback) => { if (name === 'diagnostics:export') exportReport = callback; } },
+    ipcMain: { on() {}, handle: (name, callback) => { if (name === 'diagnostics:export') exportReport = callback; } },
   };
   runInNewContext(main.slice(start, end), state);
   const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 9,

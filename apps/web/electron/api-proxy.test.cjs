@@ -18,7 +18,7 @@ function proxyFixture(overrides = {}) {
     reportIdPattern: require('./diagnostic-reports.cjs').reportIdPattern,
     backend: new URL('https://example.test'),
     sessionToken: 'test-session',
-    sessionRevision: 0, sessionLoginInProgress: false, sessionClearTask: undefined,
+    diagnosticFileTask: undefined, sessionRevision: 0, sessionLoginInProgress: false, sessionClearTask: undefined,
     trustedUrl: (url) => url.startsWith('lycan://app/'),
     loadSession: async () => 'test-session',
     saveSession: async () => {},
@@ -39,7 +39,7 @@ test('只为服主成功读取的日志补充本机接收位置，撤权不读�
   const { serve } = proxyFixture({
     resolve, app: { getPath: () => '/local' },
     net: { fetch: async () => Response.json(status === 200 ? [{ id: 'first', savedPath: 'remote-path' }] : {}, { status }) },
-    locateReceivedReport: async () => { lookups++; return '/local/verified'; },
+    diagnosticCopies: { locate: async () => { lookups++; return '/local/verified'; } },
   });
   const request = () => serve(new Request('lycan://app/api/diagnostics/reports'));
   assert.equal((await request()).status, 403);
@@ -130,7 +130,7 @@ function sessionFixture(readEncrypted, overrides = {}) {
   const counts = { reads: 0, decryptions: 0 };
   const context = {
     sessionToken: undefined, sessionLoaded: false, sessionLoadPromise: undefined,
-    sessionRevision: 0, sessionMutationPromise: Promise.resolve(), sessionClearTask: undefined,
+    diagnosticFileTask: undefined, sessionRevision: 0, sessionMutationPromise: Promise.resolve(), sessionClearTask: undefined,
     backend: new URL('https://example.test'), resolve,
     app: { getPath: () => 'isolated-profile' },
     readFile: async () => { counts.reads++; return readEncrypted(); },

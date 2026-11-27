@@ -245,8 +245,9 @@ interface Window {
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: false } | { saved: true; filePath: string; unavailableCount: number }>;
     prepareDiagnosticUpload(report: string): Promise<{ gzip: Uint8Array<ArrayBuffer>; filePath: string | null; unavailableCount: number } | { saved: false }>;
-    receiveDiagnosticReport(id: string, size: number, userId?: string, uploadedAt?: string): Promise<string>;
-    revealDiagnosticReport(id: string): Promise<void>;
+    cleanDiagnosticCopies(): Promise<void>;
+    diagnosticFile(id: string, action: 'open' | 'delete'): Promise<void>;
+    cancelDiagnosticFile(): void;
     saveDiagnosticSnapshot(report: string): Promise<number | null>;
     downloadChatFile(id: string, path: string, name: string, size: number, onProgress: (loaded: number) => void): Promise<'saved' | 'cancelled' | 'expired' | { error: string }>;
     cancelChatDownload(id: string): void;
