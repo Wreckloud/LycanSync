@@ -1,5 +1,36 @@
 import { expect, test } from '@playwright/test';
 
+test('伴奏持续有声时，弱谐波能贴底且主音和中等频段仍清晰', async ({ page }) => {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getDisplayMedia = async () => {
+      const context = new AudioContext();
+      const output = context.createMediaStreamDestination();
+      // 锯齿波同时提供强基音和逐渐变弱的谐波，覆盖整排频段。
+      const tone = context.createOscillator();
+      tone.type = 'sawtooth';
+      tone.frequency.value = 94;
+      const gain = context.createGain();
+      gain.gain.value = .12;
+      tone.connect(gain).connect(output);
+      tone.start();
+      await context.resume();
+      return output.stream;
+    };
+  });
+  await page.goto('/controls-preview.html#accompaniment');
+  const section = page.getByRole('region', { name: '本地伴奏频谱试听' });
+  const card = section.locator('article').filter({ hasText: '灵敏版' });
+  await section.getByRole('button', { name: '读取正在播放的声音' }).click();
+  const bars = card.locator('.spectrum i');
+  await expect.poll(() => bars.evaluateAll(items => Math.max(...items.map(item => item.clientHeight)))).toBeGreaterThan(65);
+  await card.screenshot({ path: test.info().outputPath('harmonics.png') });
+  const heights = await bars.evaluateAll(items => items.map(item => item.clientHeight));
+  console.log('稳定谐波的各柱高度（px）', heights.join(', '));
+  expect(heights.filter(h => h === 4).length).toBeGreaterThanOrEqual(2);
+  expect(heights.some(h => h > 4 && h <= 12)).toBe(true);
+  expect(heights.some(h => h > 12 && h < 50)).toBe(true);
+});
+
 test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即响应', async ({ page }) => {
   await page.clock.install();
   await page.addInitScript(() => {

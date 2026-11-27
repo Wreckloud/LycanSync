@@ -73,9 +73,11 @@ watchEffect(onCleanup => {
       const peakDb = analyser.minDecibels + strongest / 255 * rangeDb;
       const compensationDb = Math.min(22, Math.max(-8, (-18 - peakDb) * .8))
         * Math.min(1, Math.max(0, (peakDb + 72) / 16));
+      const peakStrength = Math.max(0, Math.min(1, (peakDb - analyser.minDecibels + compensationDb) / 60));
+      // 最强频段决定整排的最高柱，其余按与它的分贝差回落，给弱谐波留出贴底空间。
       for (let i = 0; i < targets.length; i++) {
-        const fraction = targets[i] / 255;
-        const strength = fraction > 0 ? Math.max(0, Math.min(1, (fraction * rangeDb + compensationDb) / 60)) : 0;
+        const belowPeakDb = (strongest - targets[i]) / 255 * rangeDb;
+        const strength = targets[i] > 0 ? Math.max(0, peakStrength - belowPeakDb / 32) : 0;
         targets[i] = Math.round(strength ** 1.5 * 82);
       }
     };
