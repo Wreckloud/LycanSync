@@ -4,7 +4,8 @@ import { ref, watch, watchEffect } from 'vue';
 const props = defineProps<{ track?: MediaStreamTrack; context?: AudioContext | null; responsive: boolean }>();
 const surface = ref<HTMLElement>();
 const visible = ref(false);
-const hasPeaks = ref(false);
+const showBaseline = ref(false);
+let aboveBaselineLastFrame = false;
 const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const bands = Array.from({ length: 21 }, () => ({ height: 0, peak: 0, hold: 0 }));
 
@@ -34,7 +35,8 @@ watchEffect(onCleanup => {
       bars[i].style.removeProperty('--level');
       bars[i].style.removeProperty('--peak');
     });
-    hasPeaks.value = false;
+    aboveBaselineLastFrame = false;
+    showBaseline.value = false;
     return;
   }
 
@@ -61,8 +63,7 @@ watchEffect(onCleanup => {
         let level = 0;
         for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
         const strength = level / 255;
-        const height = Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
-        targets[i] = height ? height + 4 : 0;
+        targets[i] = Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
       }
     };
   }
@@ -82,8 +83,11 @@ watchEffect(onCleanup => {
       band.height = height;
       remaining ||= band.peak > 0;
     });
-    hasPeaks.value = remaining;
-    return remaining;
+    // 各频段共用底线；全部落到底的这一帧仍显示，下一次采样仍静音才一起隐藏。
+    const show = remaining || aboveBaselineLastFrame;
+    aboveBaselineLastFrame = remaining;
+    showBaseline.value = show;
+    return show;
   }
 
   if (draw() || sample) {
@@ -96,12 +100,13 @@ watchEffect(onCleanup => {
 </script>
 
 <template>
-  <div v-if="(track && context) || hasPeaks" ref="surface" class="spectrum" aria-hidden="true"><i v-for="i in bands.length" :key="i" /></div>
+  <div v-if="(track && context) || showBaseline" ref="surface" class="spectrum" :class="{ 'has-baseline': showBaseline }" aria-hidden="true"><i v-for="i in bands.length" :key="i" /></div>
 </template>
 
 <style scoped>
 .spectrum { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 :global(.participant-media:has(.spectrum) .large-avatar) { z-index: 1; }
-.spectrum i { position: relative; height: var(--level, 0px); background: var(--muted); }
-.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--peak, 0px) - 2px); height: 2px; background: var(--text); }
+.spectrum.has-baseline { --spectrum-baseline: 4px; }
+.spectrum i { position: relative; height: calc(var(--spectrum-baseline, 0px) + var(--level, 0px)); background: var(--muted); }
+.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--spectrum-baseline, 0px) + var(--peak, 0px) - 2px); height: 2px; background: var(--text); }
 </style>

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即响应', async ({ page }) => {
+  await page.clock.install();
   await page.addInitScript(() => {
     navigator.mediaDevices.getDisplayMedia = async () => {
       const context = new AudioContext();
@@ -30,10 +31,14 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   }, level);
   const levels = () => spectrum.locator('i').evaluateAll(bars => ({
     height: Math.max(0, ...bars.map(bar => bar.clientHeight)),
-    peak: Math.max(0, ...bars.map(bar => parseFloat(getComputedStyle(bar).getPropertyValue('--peak')) || 0)),
+    peak: Math.max(0, ...bars.map(bar => parseFloat(getComputedStyle(bar, '::after').bottom) + 2)),
   }));
   await start.click();
   await expect.poll(async () => (await levels()).height).toBeGreaterThan(45);
+  const heights = () => spectrum.locator('i').evaluateAll(bars => bars.map(bar => bar.clientHeight));
+  const playing = await heights();
+  expect(playing).toHaveLength(21);
+  expect(Math.min(...playing)).toBe(4);
   await card.screenshot({ path: test.info().outputPath('playing.png') });
   await volume(0);
   await expect.poll(async () => (await levels()).peak).toBe(0);
@@ -42,12 +47,26 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   await volume(1);
   await expect.poll(async () => (await levels()).height).toBeGreaterThan(45);
 
-  await stop.click();
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 250));
+  await stop.evaluate(button => (button as HTMLButtonElement).click());
   expect(await page.evaluate(() => (window as Window & { previewAudioTrack?: MediaStreamTrack }).previewAudioTrack?.readyState)).toBe('ended');
-  await expect.poll(async () => { const { height, peak } = await levels(); return peak > height && peak > 0; }).toBe(true);
+  await page.clock.runFor(160);
+  const settling = await levels();
+  expect(settling.peak).toBeGreaterThan(settling.height);
   await card.screenshot({ path: test.info().outputPath('settling.png') });
+  for (let tick = 0; tick < 24 && (await levels()).peak > 4; tick++) {
+    expect(Math.min(...await heights())).toBeGreaterThanOrEqual(4);
+    await page.clock.runFor(80);
+  }
+  expect(await heights()).toEqual(Array(21).fill(4));
+  expect((await levels()).peak).toBe(4);
+  await card.screenshot({ path: test.info().outputPath('baseline.png') });
+  await page.clock.runFor(79);
+  expect(await heights()).toEqual(Array(21).fill(4));
+  await page.clock.runFor(1);
   await expect(spectrum).toHaveCount(0);
   await card.screenshot({ path: test.info().outputPath('silent.png') });
+  await page.clock.resume();
 
   await start.click();
   await expect.poll(async () => (await levels()).height).toBeGreaterThan(45);
