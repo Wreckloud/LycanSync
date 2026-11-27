@@ -154,10 +154,15 @@ test('服主摘要与日志跨栏目复用，重开、错误及撤权后仅展�
     { id: 'a', userId: 'first', nickname: '同名', byteSize: 32, uploadedAt: '2026-11-01T09:00:00Z' },
   ];
   await page.clock.fastForward(5500);
-  await expect(dialog.getByRole('heading', { name: '同名', exact: true })).toHaveCount(2);
-  await expect(dialog.locator('.report-member').nth(1).locator('.report-day')).toHaveCount(2);
+  await expect(dialog.getByText('同名', { exact: true })).toHaveCount(3);
+  expect(await dialog.locator('time').evaluateAll(times => times.map(time => time.getAttribute('datetime')))).toEqual(reports.map(report => report.uploadedAt));
   await expect(tab('下载日志')).toHaveCount(3);
   await dialog.screenshot({ path: testInfo.outputPath('grouped-inbox.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 430, height: 660 });
+  await expect(tab('下载日志').first()).toBeVisible();
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await dialog.screenshot({ path: testInfo.outputPath('narrow-inbox.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   reportsCode = 503;
   await page.clock.fastForward(5500);
   await expect(dialog.getByText('日志读取失败（当前显示上次结果）')).toBeVisible();
@@ -207,13 +212,13 @@ test('日志弹窗静默更新，过滤自己，按需打开与删除本地副�
   await page.getByRole('dialog').screenshot({ path: testInfo.outputPath('request-member.png'), animations: 'disabled' });
   await tab('请求日志').click();
   await expect(page.getByText(/已请求 新成员 的日志/)).toBeVisible();
-  await page.getByLabel('包含我的报告').check(); await expect(page.getByRole('heading', { name: '自己' })).toBeVisible();
+  await page.getByLabel('包含我的报告').check(); await expect(page.getByRole('dialog').getByText('自己', { exact: true })).toBeVisible();
   await page.getByLabel('包含我的报告').uncheck();
   rows.unshift({ ...entry, id: 'new' }); await page.clock.fastForward(5500);
   await expect(tab('打开文件夹')).toHaveCount(1); expect(requests).toEqual([]);
   await tab('打开文件夹').click(); await expect(tab('删除本地副本')).toBeEnabled();
   await page.getByRole('dialog', { name: '日志管理器' }).screenshot({ path: testInfo.outputPath('log-manager.png'), animations: 'disabled' });
-  await tab('删除本地副本').click(); await expect(tab('删除本地副本')).toBeDisabled();
+  await tab('删除本地副本').click(); await expect(tab('删除本地副本')).toHaveCount(0);
   await page.clock.fastForward(5500); expect(requests).toEqual(['new:open', 'new:delete']);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
