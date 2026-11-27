@@ -1,93 +1,107 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, onScopeDispose, ref, watchEffect } from 'vue';
+import { ref, watch, watchEffect } from 'vue';
 
-const props = defineProps<{ track: MediaStreamTrack; context: AudioContext; responsive: boolean }>();
+const props = defineProps<{ track?: MediaStreamTrack; context?: AudioContext | null; responsive: boolean }>();
 const surface = ref<HTMLElement>();
 const visible = ref(false);
-const foreground = ref(!document.hidden);
+const hasPeaks = ref(false);
 const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const reduced = ref(motion.matches);
-let observer: IntersectionObserver | undefined;
-let leaving = false;
-onBeforeUnmount(() => { leaving = true; });
-const updateMotion = () => { reduced.value = motion.matches; };
-const updateVisibility = () => { foreground.value = !document.hidden; };
-onMounted(() => {
-  observer = new IntersectionObserver(entries => { visible.value = entries[0].isIntersecting; });
-  observer.observe(surface.value!);
-  document.addEventListener('visibilitychange', updateVisibility);
-  motion.addEventListener('change', updateMotion);
-});
-onScopeDispose(() => {
-  observer?.disconnect();
-  document.removeEventListener('visibilitychange', updateVisibility);
-  motion.removeEventListener('change', updateMotion);
-});
+const bands = Array.from({ length: 21 }, () => ({ height: 0, peak: 0, hold: 0 }));
+
+watch(surface, (element, _, onCleanup) => {
+  if (!element) return;
+  let inView = false;
+  const refresh = () => { visible.value = inView && !document.hidden && !motion.matches; };
+  const observer = new IntersectionObserver(entries => { inView = entries[0].isIntersecting; refresh(); });
+  observer.observe(element);
+  document.addEventListener('visibilitychange', refresh);
+  motion.addEventListener('change', refresh);
+  onCleanup(() => {
+    observer.disconnect();
+    document.removeEventListener('visibilitychange', refresh);
+    motion.removeEventListener('change', refresh);
+    visible.value = false;
+  });
+}, { flush: 'post' });
 
 watchEffect(onCleanup => {
   const element = surface.value;
-  if (!element || !visible.value || !foreground.value || reduced.value || props.context.state === 'closed') return;
-  const context = props.context;
-  const analyser = context.createAnalyser();
-  const responsive = props.responsive;
-  analyser.fftSize = responsive ? 2048 : 1024;
-  if (responsive) {
-    analyser.minDecibels = -78;
-    analyser.maxDecibels = -18;
-    analyser.smoothingTimeConstant = .4;
-  }
-  const input = context.createMediaStreamSource(new MediaStream([props.track]));
-  // 只读取频谱，同一轨道的实际播放与音量继续由房间管理。
-  input.connect(analyser);
-  const bins = new Uint8Array(analyser.frequencyBinCount);
+  if (!element) return;
   const bars = Array.from(element.children) as HTMLElement[];
-  const edges = Array.from({ length: bars.length + 1 }, (_, i) =>
-    Math.min(bins.length, Math.round(65 * (16000 / 65) ** (i / bars.length) * analyser.fftSize / context.sampleRate)));
-  const peaks = bars.map(() => 4);
-  const hold = bars.map(() => 0);
-  function draw() {
-    analyser.getByteFrequencyData(bins);
-    bars.forEach((bar, i) => {
-      let level = 0;
-      for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
-      const strength = level / 255;
-      const height = 4 + Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
-      if (height >= peaks[i]) { peaks[i] = height; hold[i] = 3; }
-      else if (hold[i] > 0) hold[i]--;
-      else peaks[i] = Math.max(height, peaks[i] - 5);
-      bar.style.setProperty('--level', height + 'px');
-      bar.style.setProperty('--peak', peaks[i] + 'px');
+  if (!visible.value) {
+    bands.forEach((band, i) => {
+      band.height = band.peak = band.hold = 0;
+      bars[i].style.removeProperty('--level');
+      bars[i].style.removeProperty('--peak');
     });
+    hasPeaks.value = false;
+    return;
   }
-  draw();
-  const timer = window.setInterval(draw, 80);
-  onCleanup(() => {
-    window.clearInterval(timer);
-    input.disconnect();
-    analyser.disconnect();
-    // 退场沿用最后一帧做下落动画；采样和音频节点仍即时释放。
-    if (!leaving) bars.forEach(bar => { bar.style.removeProperty('--level'); bar.style.removeProperty('--peak'); });
-  });
+
+  const { context, track, responsive } = props;
+  const targets = new Uint8Array(bands.length);
+  let sample: (() => void) | undefined;
+  if (track && context && context.state !== 'closed') {
+    const analyser = context.createAnalyser();
+    analyser.fftSize = responsive ? 2048 : 1024;
+    if (responsive) {
+      analyser.minDecibels = -78;
+      analyser.maxDecibels = -18;
+      analyser.smoothingTimeConstant = .4;
+    }
+    const input = context.createMediaStreamSource(new MediaStream([track]));
+    input.connect(analyser);
+    onCleanup(() => { input.disconnect(); analyser.disconnect(); });
+    const bins = new Uint8Array(analyser.frequencyBinCount);
+    const edges = Array.from({ length: bands.length + 1 }, (_, i) =>
+      Math.min(bins.length, Math.round(65 * (16000 / 65) ** (i / bands.length) * analyser.fftSize / context.sampleRate)));
+    sample = () => {
+      analyser.getByteFrequencyData(bins);
+      for (let i = 0; i < targets.length; i++) {
+        let level = 0;
+        for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
+        const strength = level / 255;
+        const height = Math.round(responsive ? strength ** 1.5 * 82 : strength * 50);
+        targets[i] = height ? height + 4 : 0;
+      }
+    };
+  }
+
+  // 停止分享就释放音频节点，最后几帧只用已有的柱高和峰值，按静音时的速度落完。
+  function draw() {
+    sample?.();
+    let remaining = false;
+    bands.forEach((band, i) => {
+      const height = targets[i] || Math.max(0, band.height - 14);
+      const previousPeak = band.peak;
+      if (height > 0 && height >= band.peak) { band.peak = height; band.hold = 3; }
+      else if (band.hold > 0) band.hold--;
+      else band.peak = Math.max(height, band.peak - 5);
+      if (height !== band.height) bars[i].style.setProperty('--level', height + 'px');
+      if (band.peak !== previousPeak) bars[i].style.setProperty('--peak', band.peak + 'px');
+      band.height = height;
+      remaining ||= band.peak > 0;
+    });
+    hasPeaks.value = remaining;
+    return remaining;
+  }
+
+  if (draw() || sample) {
+    const timer = window.setInterval(() => {
+      if (!draw() && !sample) window.clearInterval(timer);
+    }, 80);
+    onCleanup(() => window.clearInterval(timer));
+  }
 }, { flush: 'post' });
 </script>
 
 <template>
-  <div ref="surface" class="spectrum" aria-hidden="true"><i v-for="i in 21" :key="i" /></div>
+  <div v-if="(track && context) || hasPeaks" ref="surface" class="spectrum" aria-hidden="true"><i v-for="i in bands.length" :key="i" /></div>
 </template>
 
 <style scoped>
 .spectrum { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 :global(.participant-media:has(.spectrum) .large-avatar) { z-index: 1; }
-.spectrum i { position: relative; height: var(--level, 4px); background: var(--muted); }
-.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--peak, 4px) - 2px); height: 2px; background: var(--text); }
-</style>
-
-<style>
-@media (prefers-reduced-motion: no-preference) {
-  .spectrum-reveal-enter-active, .spectrum-reveal-leave-active { transform-origin: bottom; }
-  .spectrum-reveal-enter-active { transition: transform var(--motion-expand-duration) var(--motion-ease), opacity var(--motion-surface-duration) ease; }
-  .spectrum-reveal-leave-active { transition: transform var(--motion-surface-duration) ease-in, opacity var(--motion-surface-duration) ease var(--motion-surface-duration); }
-  .participant-media .spectrum-reveal-enter-active.spectrum-reveal-enter-from,
-  .participant-media .spectrum-reveal-leave-active.spectrum-reveal-leave-to { transform: scaleY(.025); opacity: 0; }
-}
+.spectrum i { position: relative; height: var(--level, 0px); background: var(--muted); }
+.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--peak, 0px) - 2px); height: 2px; background: var(--text); }
 </style>

@@ -131,13 +131,11 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-media">
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
-            <Transition name="spectrum-reveal">
-              <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
-                :class="{ 'has-sound': !accompaniment.paused && !silent }">
-                <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
-                  :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
-              </div>
-            </Transition>
+            <div v-if="showSpectrum && screen === 'off'" class="spectrum-preview" aria-hidden="true"
+              :class="{ 'has-sound': accompaniment && !accompaniment.paused && !silent }">
+              <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
+                :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
+            </div>
             <AccompanimentBadge v-if="accompaniment || (card.local && screen === 'off')" :local="card.local"
               :sharing="accompaniment?.id" :icon="accompaniment?.icon" :open="card.local && !!menuAnchor"
               @activate="accompaniment ? stopAudio() : toggleSourceMenu($event)" />
@@ -221,15 +219,15 @@ function setSourceOpen(source: Source, open: boolean) {
 .media-badge { position: absolute; bottom: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
-.spectrum-preview i { position: relative; height: 4px; transition: height 550ms ease-in 320ms; }
+.spectrum-preview i { position: relative; height: 0; transition: height 700ms linear; }
 .spectrum-preview.has-sound i { height: var(--band-height); transition: none; }
 .spectrum-preview i::before, .spectrum-preview i::after { content: ''; position: absolute; inset-inline: 0; }
-.spectrum-preview i::before { bottom: 0; height: 100%; max-height: 4px; background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); animation: spectrum-pulse 1.8s ease-in-out var(--phase) infinite paused; }
-.spectrum-preview.has-sound i::before { max-height: none; }
-.spectrum-preview i::after { top: calc(100% - 4px); height: 2px; background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
+.spectrum-preview i::before { bottom: 0; height: 100%; max-height: 0; transition: max-height 400ms linear; background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); animation: spectrum-pulse 1.8s ease-in-out var(--phase) infinite paused; }
+.spectrum-preview.has-sound i::before { max-height: var(--band-height); transition: none; }
+.spectrum-preview i::after { bottom: 100%; height: min(2px, 100%); background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
 .spectrum-preview.has-sound i::before, .spectrum-preview.has-sound i::after { animation-play-state: running; }
 @keyframes spectrum-pulse { 0%, 85%, 100% { clip-path: inset(calc(100% - 4px) 0 0); } 50% { clip-path: inset(0); } }
-@keyframes spectrum-peak { 0%, 100% { top: calc(100% - 4px); } 50%, 68% { top: 0; } }
+@keyframes spectrum-peak { 0%, 100% { bottom: 0; } 50%, 68% { bottom: 100%; } }
 .muted-badge { right: 7px; min-width: 22px; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
 .screen-preview { display: grid; justify-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
