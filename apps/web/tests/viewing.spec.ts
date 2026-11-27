@@ -392,6 +392,72 @@ test('弱网重连后持续稳定才恢复缩略图，仍能主动观看', async
   await expect.poll(visibility).toMatchObject({ A: true, B: true });
 });
 
+test('聚焦边缘按网格顺序循环切换并保留观看布局', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await sharing(page, ['A', 'B', 'C']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  const stage = page.locator('.viewing-stage');
+  const caption = stage.locator('.viewing-tile:not([inert]) .viewing-caption > span').first();
+  const previous = stage.getByRole('button', { name: '上一个共享画面' });
+  const next = stage.getByRole('button', { name: '下一个共享画面' });
+  await stage.hover();
+  await expect(previous).toHaveCSS('opacity', '0');
+  const height = await stage.evaluate(el => el.clientHeight);
+  await previous.hover();
+  await expect(previous).toHaveCSS('opacity', '1');
+  await expect(next).toHaveCSS('opacity', '0');
+  await expect(caption).toHaveText('成员A');
+  const paint = (color: string) => page.evaluate(fill =>
+    (window as unknown as { __viewingTest: { paint(w: number, h: number, color: string): void } }).__viewingTest.paint(640, 360, fill), color);
+  await paint('#405767');
+  await expect(stage.locator('video.is-video-ready')).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('focus-left.png') });
+  await previous.click();
+  await expect(caption).toHaveText('成员C');
+  await previous.click();
+  await expect(caption).toHaveText('成员B');
+  await next.click();
+  await expect(caption).toHaveText('成员C');
+  await expect(next).toHaveCSS('opacity', '1');
+  await expect(previous).toHaveCSS('opacity', '0');
+  await paint('#535d4d');
+  await expect(stage.locator('video.is-video-ready')).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('focus-right.png') });
+  await next.click();
+  await expect(caption).toHaveText('成员A');
+  expect(await stage.evaluate(el => el.clientHeight)).toBe(height);
+  await expect(page.locator('.viewing-members-panel')).toBeVisible();
+  await sharing(page, ['A', 'C']);
+  await previous.click();
+  await expect(caption).toHaveText('成员C');
+  await next.click();
+  await expect(caption).toHaveText('成员A');
+  await stage.hover();
+  await expect(stage.locator('.viewing-tile')).toHaveCount(1);
+  await stage.getByRole('button', { name: '占满窗口' }).click();
+  await previous.click();
+  await expect(caption).toHaveText('成员C');
+  await expect(page.locator('.call-viewing-panel')).toHaveClass(/is-expanded/);
+  await expect(stage.locator('.viewing-tile')).toHaveCount(1);
+  await stage.hover();
+  const popup = page.waitForEvent('popup');
+  await stage.getByRole('button', { name: '弹出观看区' }).click();
+  const viewer = await popup;
+  await viewer.getByRole('button', { name: '下一个共享画面' }).click();
+  await expect(viewer.locator('.viewing-tile:not([inert]) .viewing-caption > span').first()).toHaveText('成员A');
+  await viewer.locator('.viewing-stage').hover();
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(1);
+  await viewer.getByRole('button', { name: '返回主界面' }).click();
+  await stage.hover();
+  await expect(stage.locator('.viewing-tile')).toHaveCount(1);
+  await stage.getByRole('button', { name: '查看全部共享画面' }).click();
+  await expect(previous).toHaveCount(0);
+  await stage.getByRole('button', { name: '聚焦成员A' }).click();
+  await sharing(page, ['A']);
+  await expect(next).toHaveCount(0);
+  await expect(previous).toHaveCount(0);
+});
+
 test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复低层', async ({ page }) => {
   await sharing(page, ['A', 'B']);
   const quality = () => page.evaluate(() =>

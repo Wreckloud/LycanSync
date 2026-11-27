@@ -3,7 +3,7 @@ import { motionDurationMs } from '../styles/motion';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
-import { ArrowLeft, ChevronDown, ExternalLink, Grid2X2, Focus, Maximize, Minimize, Volume2, VolumeX, X } from '@lucide/vue';
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Grid2X2, Focus, Maximize, Minimize, Volume2, VolumeX, X } from '@lucide/vue';
 import { VideoQuality, type Room } from 'livekit-client';
 import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShareLayout';
 import { useViewingSize } from '../viewing/useViewingSize';
@@ -322,6 +322,14 @@ function select(share: ViewedShare) {
   props.view.height = 'max';
 }
 
+function stepFocus(direction: -1 | 1) {
+  const { shares, focused } = props.view;
+  const current = shares.findIndex(share => share.key === focused);
+  if (current < 0 || shares.length < 2) return;
+  const next = shares[(current + direction + shares.length) % shares.length];
+  props.view.select(next.participant.identity);
+}
+
 let lastLayoutWheelAt = -Infinity;
 function layoutWheel(event: WheelEvent) {
   if ((event.target as Element).closest('.inline-volume')) return;
@@ -464,6 +472,10 @@ onScopeDispose(() => {
           </div>
         </TransitionGroup>
       </HorizontalScroll>
+      <template v-if="active && focus && !reconnecting && view.shares.length > 1">
+        <button class="viewing-step is-previous" type="button" aria-label="上一个共享画面" @click="stepFocus(-1)"><ChevronLeft :size="18" /></button>
+        <button class="viewing-step is-next" type="button" aria-label="下一个共享画面" @click="stepFocus(1)"><ChevronRight :size="18" /></button>
+      </template>
     </div>
     <Transition name="layout-reveal" :css="!resizing" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
       <div v-show="showMembers || memberBlend > 0" class="layout-reveal" :class="{ 'is-blending-members': memberBlend > 0 }"
