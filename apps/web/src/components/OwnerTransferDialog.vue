@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { authRequest, type AuthUser } from '../auth/authApi';
+import { authRequest } from '../auth/authApi';
+import { loadServerMembers } from '../settings/loadServerMembers';
 import PasswordField from './PasswordField.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
@@ -51,11 +52,6 @@ async function verifyPassword() {
     if (current()) { memberScroll.value = 0; step.value = 'members'; }
   } catch (reason) { if (current()) error.value = reason instanceof Error ? reason.message : '无法验证恢复密码，请重试。'; }
   finally { if (current()) busy.value = false; }
-}
-async function loadMembers(search: string, offset: number, signal: AbortSignal) {
-  const query = new URLSearchParams({ search, offset: String(offset) });
-  const members = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined, signal);
-  return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
 }
 function select(member: MemberOption) { selected.value = member; step.value = 'confirm'; error.value = ''; }
 function restart() { stopStatusRead(); password.value = ''; selected.value = null; error.value = ''; ended.value = ''; step.value = 'password'; }
@@ -156,7 +152,7 @@ onScopeDispose(() => { controller.abort(); stopStatusRead(); animation?.cancel()
         <Transition name="entry-page" @before-enter="activate" @before-leave="retire">
           <div v-if="step === 'members' || step === 'confirm'" v-show="step === 'members'" class="owner-transfer-page" :data-active="step === 'members'">
             <p>选择一位成员接任服主，下一步核对交接信息。</p>
-            <MemberPicker v-model:search="search" v-model:scroll-position="memberScroll" :load="loadMembers" :selected="selected?.userId" :disabled="locked" label="搜索服务器成员" @select="select" />
+            <MemberPicker v-model:search="search" v-model:scroll-position="memberScroll" :load="loadServerMembers" :selected="selected?.userId" :disabled="locked" label="搜索服务器成员" @select="select" />
             <div class="card-actions"><button type="button" :disabled="locked" @click="close">返回</button></div>
           </div>
         </Transition>

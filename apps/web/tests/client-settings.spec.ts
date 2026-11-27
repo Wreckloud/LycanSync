@@ -43,6 +43,7 @@ window.lycanDesktop = {
 createApp({ setup() {
   const active = ref(true);
   const report = {
+    requestedUploadEnabled:ref(true), setRequestedUpload:enabled => { report.requestedUploadEnabled.value=enabled; },
     recording:ref(true), automaticEnabled:ref(true), reason:ref(''), error:ref(''), saving:ref(false), notes:ref(''), latest:ref(null),
     savedReport:ref({ kind:'screen-media', endedAt:'2026-11-14T00:00:00Z', bytes:4096, clientVersion:'0.4.19' }),
     savedSizeBytes:ref(4096), persistenceError:ref(''), problemMarkers:ref([]),
@@ -66,6 +67,10 @@ createApp({ setup() {
   const exportReport = page.getByRole('button', { name: '导出全部报告', exact: true });
   await expect(exportReport).toBeHidden();
   await page.locator('.diagnostic-report-settings').screenshot({ path: testInfo.outputPath('app-logs.png') });
+  const allowRequest = page.getByRole('checkbox', { name: /允许服主请求日志/ });
+  await expect(allowRequest).toBeChecked();
+  await allowRequest.uncheck();
+  await expect(allowRequest).not.toBeChecked();
   await expect(page.getByTestId('calls')).not.toContainText('upload');
   await page.getByRole('button', { name: '上传日志', exact: true }).click();
   await expect(page.getByTestId('calls')).toContainText('upload');
@@ -74,8 +79,8 @@ createApp({ setup() {
   const dialog = page.getByRole('dialog', { name: '诊断报告' });
   await expect(dialog).toBeHidden();
   await page.getByRole('button', { name: '更多诊断选项', exact: true }).click();
-  const location = page.getByRole('group', { name: '日志保存位置' });
-  const choose = location.getByRole('button', { name: /^更改日志保存位置/ });
+  const location = page.getByRole('group', { name: '手动导出位置' });
+  const choose = location.getByRole('button', { name: /^更改手动导出位置/ });
   const reset = location.getByRole('button', { name: '恢复默认' });
   await expect(choose).toContainText('exports');
   await choose.click();

@@ -56,6 +56,7 @@ const apiRoutePolicies = new Map([
   ['GET /api/auth/account', {}],
   ['GET /api/chat/upload-limits', {}],
   ['GET /api/diagnostics/reports', {}],
+  ['POST /api/diagnostics/reports/request', {}],
   ['POST /api/diagnostics/reports', { maxBodyBytes: 8 * 1024 * 1024, reportTransfer: true }],
   ['PUT /api/chat/upload-limits', {}],
   ['GET /api/auth/server-settings', {}],

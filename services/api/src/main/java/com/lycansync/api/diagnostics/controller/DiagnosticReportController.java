@@ -2,6 +2,7 @@ package com.lycansync.api.diagnostics.controller;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.diagnostics.model.DiagnosticReportEntry;
+import com.lycansync.api.diagnostics.service.DiagnosticReportRequests;
 import com.lycansync.api.diagnostics.service.DiagnosticReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
@@ -33,6 +35,15 @@ import java.util.UUID;
 @Tag(name = "诊断报告")
 public class DiagnosticReportController {
     private final DiagnosticReportService reports;
+
+    private final DiagnosticReportRequests requests;
+
+    @PostMapping("/request")
+    @Operation(summary = "服主请求指定成员上传本次诊断")
+    public ResponseEntity<Void> request(@AuthenticationPrincipal AuthenticatedUser owner, @RequestParam UUID memberId) {
+        requests.request(owner, memberId);
+        return ResponseEntity.accepted().build();
+    }
 
     @PostMapping(consumes = "application/gzip")
     @Operation(summary = "向服主提交诊断报告")

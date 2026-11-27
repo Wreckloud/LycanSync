@@ -7,6 +7,8 @@ import { useSettingsRead } from '../../settings/useSettingsRead';
 import { keepDialogFocus } from '../dialogFocus';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { useLoadingHint } from '../useLoadingHint';
+import MemberPicker, { type MemberOption } from '../MemberPicker.vue';
+import { loadServerMembers } from '../../settings/loadServerMembers';
 import InlineFeedback from '../InlineFeedback.vue';
 
 interface ReceivedReport { id: string; userId?: string; nickname: string; uploadedAt: string; byteSize: number; savedPath?: string | null }
@@ -18,6 +20,8 @@ const includeOwn = ref(false);
 const activeId = ref('');
 const feedback = ref('');
 const error = ref('');
+const choosingMember = ref(false);
+const requesting = ref(false);
 const cleanupError = ref('');
 const lifetime = new AbortController();
 const backdrop = useBackdropDismiss(() => emit('close'));
@@ -64,6 +68,22 @@ onScopeDispose(() => {
   if (activeId.value) desktop?.cancelDiagnosticFile();
 });
 
+async function requestReport(member: MemberOption) {
+  if (requesting.value) return;
+  requesting.value = true;
+  feedback.value = error.value = '';
+  try {
+    const response = await authenticatedFetch('/api/diagnostics/reports/request?memberId=' + encodeURIComponent(member.userId), {
+      method: 'POST', signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(15_000)]),
+    });
+    if (!response.ok) throw await readApiError(response);
+    choosingMember.value = false;
+    feedback.value = `已请求 ${member.nickname} 的日志。请求有效期为两分钟，对方在线并允许上报时会自动上传。`;
+  } catch (reason) {
+    if (!lifetime.signal.aborted) error.value = reason instanceof Error ? reason.message : '请求日志失败，请重试。';
+  } finally { requesting.value = false; }
+}
+
 async function file(entry: ReceivedReport, action: 'open' | 'delete') {
   if (activeId.value) return;
   // 即将禁用行按钮，先把键盘焦点留在弹窗内。
@@ -97,6 +117,12 @@ async function file(entry: ReceivedReport, action: 'open' | 'delete') {
   <div class="dialog-backdrop" v-on="backdrop" @keydown.esc.stop="emit('close')">
     <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="report-library-title" tabindex="-1" class="report-dialog" @keydown="keepDialogFocus">
       <h2 id="report-library-title">日志管理器</h2>
+      <div class="settings-action-row">
+        <button type="button" class="settings-button" :disabled="requesting" :aria-expanded="choosingMember" @click="choosingMember = !choosingMember">
+          {{ choosingMember ? '收起成员列表' : '请求成员日志' }}
+        </button>
+      </div>
+      <MemberPicker v-if="choosingMember" :load="loadServerMembers" :disabled="requesting" label="搜索服务器成员" action="请求日志" @select="requestReport" />
       <label><input v-model="includeOwn" type="checkbox" /> 包含我的报告</label>
       <div class="report-content">
         <InlineFeedback :status="feedback" :message="error || readError || cleanupError" :pending="reading ? '正在读取日志…' : ''" />
@@ -127,6 +153,7 @@ async function file(entry: ReceivedReport, action: 'open' | 'delete') {
 <style scoped>
 .report-dialog { display: flex; flex-direction: column; gap: 16px; width: min(760px, calc(100vw - 32px)); height: min(700px, calc(100vh - 48px)); box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
+.report-dialog :deep(.member-picker-list) { height: auto; max-height: min(200px, 25vh); }
 .report-content { flex: 1; min-height: 0; overflow-y: auto; }
 .report-member h3 { margin: 12px 0 4px; font-size: 15px; }
 .report-day h4, footer small { color: var(--muted); font-size: 12px; }

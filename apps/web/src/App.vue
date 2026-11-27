@@ -261,7 +261,9 @@ const { groupPresences, presenceConnectionLost, refreshGroupPresence } = useGrou
 let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
 const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
-const ownPresence = useOwnPresence(props.user.id, { showActivity, showLastOnline }, desktop);
+const ownPresence = useOwnPresence(props.user.id, { showActivity, showLastOnline }, desktop, {
+  available: () => diagnosticReport.canUploadRequested(), send: () => diagnosticReport.uploadRequested(),
+});
 const { currentActivity, sharedActivity, publicPresenceStatus, personalPresenceLabel,
   presenceMode, presenceReady, presencePreferenceError, presenceSyncing, presenceSyncError,
   sendHeartbeat, changePresenceMode, startPresenceHeartbeat, updateOwnPresenceStatus, prepareLogout, reportOfflineBeforeClose } = ownPresence;

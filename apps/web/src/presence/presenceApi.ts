@@ -20,15 +20,18 @@ export interface PresenceHeartbeatRequest {
 
 export async function sendPresenceHeartbeat(
   status: UserPresenceStatus, activity: UserActivity | null, signal?: AbortSignal,
-  visibility?: Pick<PresenceHeartbeatRequest, 'showActivity' | 'showLastOnline'>,
-): Promise<void> {
-  const response = await authenticatedFetch('/api/presence/heartbeat', {
+  visibility?: Pick<PresenceHeartbeatRequest, 'showActivity' | 'showLastOnline'> & { acceptDiagnosticRequest?: boolean },
+): Promise<true | void> {
+  const { acceptDiagnosticRequest, ...publicVisibility } = visibility ?? {};
+  const path = '/api/presence/heartbeat' + (acceptDiagnosticRequest ? '?acceptDiagnosticRequest=true' : '');
+  const response = await authenticatedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ status, activity, ...visibility } satisfies PresenceHeartbeatRequest),
+    body: JSON.stringify({ status, activity, ...publicVisibility } satisfies PresenceHeartbeatRequest),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) {
     throw new Error('在线状态更新失败。');
   }
+  if (acceptDiagnosticRequest && response.status === 200 && await response.json() === true) return true;
 }

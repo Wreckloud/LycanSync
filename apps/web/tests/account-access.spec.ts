@@ -200,6 +200,13 @@ test('日志弹窗静默更新，过滤自己，按需打开与删除本地副�
   await tab('服主管理').click(); expect(reads).toBe(0);
   await tab('打开日志管理器').click();
   await expect(page.getByText('还没有成员上传日志。')).toBeVisible();
+  await page.route('**/api/auth/access/members?**', route => route.fulfill({ json: [{ id: 'new-member', nickname: '新成员', avatar: '' }] }));
+  await page.route('**/api/diagnostics/reports/request?memberId=new-member', route => route.fulfill({ status: 202 }));
+  await tab('请求成员日志').click();
+  await expect(page.getByText('新成员', { exact: true })).toBeVisible();
+  await page.getByRole('dialog').screenshot({ path: testInfo.outputPath('request-member.png'), animations: 'disabled' });
+  await tab('请求日志').click();
+  await expect(page.getByText(/已请求 新成员 的日志/)).toBeVisible();
   await page.getByLabel('包含我的报告').check(); await expect(page.getByRole('heading', { name: '自己' })).toBeVisible();
   await page.getByLabel('包含我的报告').uncheck();
   rows.unshift({ ...entry, id: 'new' }); await page.clock.fastForward(5500);

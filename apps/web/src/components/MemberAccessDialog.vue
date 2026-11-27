@@ -6,7 +6,7 @@ import { motionDurationMs } from '../styles/motion';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
 import MemberIdentity from './MemberIdentity.vue';
 import SegmentedControl from './SegmentedControl.vue';
-import { authRequest, type AuthUser } from '../auth/authApi';
+import { loadServerMembers } from '../settings/loadServerMembers';
 import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
 import { useMemberAccess, type MemberAccessMode, type AccessLinkFilter } from '../settings/useMemberAccess';
 import { useBackdropDismiss } from './useBackdropDismiss';
@@ -50,11 +50,6 @@ const filters: { id: AccessLinkFilter; label: string }[] = [
 const backdropEvents = useBackdropDismiss(close);
 
 function close() { if (!locked.value) { if (operation.value) cancelOperation(); else emit('close'); } }
-async function loadMembers(search: string, offset: number, signal: AbortSignal) {
-  const query = new URLSearchParams({ search, offset: String(offset) });
-  const members = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined, signal);
-  return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
-}
 async function focusConfirmation() { await nextTick(); dialog.value?.focus({ preventScroll: true }); }
 function selectMember(member: MemberOption) {
   if (selectedMember.value?.userId !== member.userId) note.value = `${member.nickname} 的恢复链接`;
@@ -142,7 +137,7 @@ onMounted(() => dialog.value?.focus());
         <p v-else>查看邀请与恢复链接，修改备注或撤销不再需要的链接。</p>
       </header>
       <div v-if="mode === 'recovery'" class="access-body">
-        <MemberPicker v-model:search="memberSearch" v-model:scroll-position="memberScroll" :load="loadMembers" :disabled="locked || !recordsLoaded" label="搜索可恢复成员" @select="selectMember">
+        <MemberPicker v-model:search="memberSearch" v-model:scroll-position="memberScroll" :load="loadServerMembers" :disabled="locked || !recordsLoaded" label="搜索可恢复成员" @select="selectMember">
           <template #action-label="{ member }">{{ recoveryTargets.has(member.userId) ? '已生成' : '选择' }}</template>
         </MemberPicker>
         <InlineFeedback :message="recordsError" :pending="!recordsLoaded && refreshing ? '正在读取链接…' : ''" />

@@ -16,7 +16,7 @@ function deferred<T>() {
 }
 async function settle() { for (let turn = 0; turn < 4; turn++) await nextTick(); }
 
-function setup() {
+function setup(diagnosticUpload?: Parameters<typeof useOwnPresence>[3]) {
   let clock = 0;
   class TestElement { closest() { return this; } }
   class TestKeyboardEvent { repeat = false; key = 'a'; }
@@ -40,13 +40,34 @@ function setup() {
   const preference = { mode, ready: ref(true), error: ref(''), loaded: Promise.resolve(), setMode: (next: PresenceMode) => { mode.value = next; } };
   vi.mocked(usePresencePreference).mockReturnValue(preference);
   vi.mocked(sendPresenceHeartbeat).mockReset().mockResolvedValue(undefined);
-  const app = scope.run(() => useOwnPresence('self', visibility, desktop))!;
+  const app = scope.run(() => useOwnPresence('self', visibility, desktop, diagnosticUpload))!;
   const state = { ...app, ...visibility, presencePreference: preference, sendPresenceHeartbeat: vi.mocked(sendPresenceHeartbeat) };
   return { app, state, desktop, initialActivity, scope, listeners, removeActivityListener,
     advanceClock: (ms: number) => { clock += ms; },
     interact: (trusted = true) => listeners.get('click')!({ isTrusted: trusted, target: new TestElement() } as unknown as Event),
     notifyActivity: (activity: DetectedActivity | null) => activityListener(activity), stop: () => scope.stop() };
 }
+
+it('只随可接收请求的心跳领取，离开页面后迟到的响应不会触发上传', async () => {
+  const send = vi.fn(async () => {});
+  const f = setup({ available: () => true, send });
+  try {
+    await f.app.sendHeartbeat();
+    expect(f.state.sendPresenceHeartbeat.mock.lastCall?.[3]?.acceptDiagnosticRequest).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    f.state.sendPresenceHeartbeat.mockResolvedValueOnce(true);
+    await f.app.sendHeartbeat();
+    expect(send).toHaveBeenCalledTimes(1);
+    const late = deferred<true>();
+    f.state.sendPresenceHeartbeat.mockReturnValueOnce(late.promise);
+    const pending = f.app.sendHeartbeat();
+    await settle();
+    f.stop();
+    late.resolve(true);
+    await pending;
+    expect(send).toHaveBeenCalledTimes(1);
+  } finally { f.stop(); }
+});
 
 it('重复启动只创建一组计时器，销毁移除输入及活动监听并停止同步', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });

@@ -56,6 +56,31 @@ beforeEach(() => {
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+it('请求只上传当前匿名样本一次，手写说明和历史报告留在本机，允许关闭并记住', async () => {
+  const { report, exportDiagnosticReport } = setup();
+  const fetchReport = vi.fn(async (_url: string, _init: RequestInit) => new Response(null, { status: 204 }));
+  vi.stubGlobal('fetch', fetchReport);
+  expect(report.requestedUploadEnabled.value).toBe(true);
+  await report.uploadRequested();
+  expect(fetchReport).not.toHaveBeenCalled();
+  report.start();
+  report.notes.value = '私人说明';
+  await vi.advanceTimersByTimeAsync(2000);
+  await Promise.all([report.uploadRequested(), report.uploadRequested()]);
+  expect(fetchReport).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchReport.mock.calls[0];
+  expect(url).toBe('/api/diagnostics/reports');
+  const text = await new Response((init.body as Blob).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  expect(JSON.parse(text).samples.length).toBeGreaterThan(0);
+  expect(text).not.toContain('私人说明');
+  expect(text).not.toContain('private-user-id');
+  expect(exportDiagnosticReport).not.toHaveBeenCalled();
+  report.setRequestedUpload(false);
+  await report.uploadRequested();
+  expect(fetchReport).toHaveBeenCalledTimes(1);
+  expect(setup().report.requestedUploadEnabled.value).toBe(false);
+});
+
 it('房间清理后仍能导出 SDK 断开原因，关闭记录和新报告隔离', async () => {
   const { room, report, exportDiagnosticReport } = setup();
   report.start();

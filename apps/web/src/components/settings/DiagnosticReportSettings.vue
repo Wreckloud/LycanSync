@@ -9,7 +9,7 @@ import MediaDiagnostics from '../MediaDiagnostics.vue';
 import SaveDirectorySetting from './SaveDirectorySetting.vue';
 
 const props = defineProps<{ report: ReturnType<typeof useDiagnosticReport>; room: Room | null; active: boolean }>();
-const { recording, automaticEnabled, reason, error, saving, notes,
+const { recording, automaticEnabled, requestedUploadEnabled, reason, error, saving, notes,
   savedReport, savedSizeBytes, persistenceError } = props.report;
 const desktop = Boolean(window.lycanDesktop);
 const problemCategory = ref('audio-breakup');
@@ -44,6 +44,10 @@ function updateAutomatic(event: Event) {
       </div>
       <button type="button" class="settings-button settings-control" :disabled="deliveryDisabled" @click="report.upload(notes)">上传日志</button>
     </div>
+    <label class="settings-toggle">
+      <span><strong>允许服主请求日志</strong><small>收到请求时自动上传本次诊断，不含历史报告和问题说明。</small></span>
+      <input type="checkbox" :checked="requestedUploadEnabled" @change="report.setRequestedUpload(($event.target as HTMLInputElement).checked)" />
+    </label>
     <small v-if="report.exportStatus.value" class="export-status" role="status">{{ report.exportStatus.value }}</small>
     <button type="button" class="disclosure-trigger" :aria-expanded="moreOpen" :aria-controls="moreId" @click="moreOpen = !moreOpen">
       <ChevronRight :size="12" class="disclosure-arrow" :class="{ 'is-open': moreOpen }" aria-hidden="true" />{{ moreOpen ? '收起诊断选项' : '更多诊断选项' }}

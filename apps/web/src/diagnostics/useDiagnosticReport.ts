@@ -11,6 +11,7 @@ const CHECKPOINT_INTERVAL_MS = 15_000;
 const MAX_SAMPLES = 900;
 const MAX_DURATION_MS = 30 * 60_000;
 const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
+const REQUESTED_UPLOAD_KEY = 'lycansync.requested-diagnostic-upload';
 const AUTOMATIC_DIAGNOSTICS_KEY = 'lycansync.automatic-diagnostics';
 type DiagnosticSettings = { quality: string; customQuality?: CustomScreenShareQuality;
   inputGain: number; outputVolume: number; screenShareVolume: number;
@@ -401,6 +402,8 @@ export function useDiagnosticReport(options: {
   const notes = ref('');
   const problemMarkers = ref<{ time: string; category: string; recording: boolean }[]>([]);
   const automaticEnabled = ref(false);
+  const requestedUploadEnabled = ref(false);
+  let requestedUpload: AbortController | undefined;
   const discardedSamples = ref(0);
   const savedSizeBytes = ref<number | null>(null);
   const savedReport = shallowRef<Awaited<ReturnType<NonNullable<Window['lycanDesktop']>['getSavedDiagnosticReport']>>>(null);
@@ -765,6 +768,7 @@ export function useDiagnosticReport(options: {
   // 退出仍要写完诊断快照，此时主进程已停止提供报告列表。
   function beginClose() {
     closing = true;
+    requestedUpload?.abort();
     savedReportGeneration++;
   }
   async function flush() {
@@ -799,6 +803,47 @@ export function useDiagnosticReport(options: {
   }
 
   const uploadLifetime = new AbortController();
+  function setRequestedUpload(enabled: boolean) {
+    requestedUploadEnabled.value = enabled;
+    if (!enabled) requestedUpload?.abort();
+    try { localStorage.setItem(REQUESTED_UPLOAD_KEY, String(enabled)); }
+    catch { error.value = '本次选择已生效，但无法保存自动上报设置。'; }
+  }
+
+  function canUploadRequested() {
+    return requestedUploadEnabled.value && !disposed && !closing && !saving.value && samples.length > 0;
+  }
+
+  async function uploadRequested() {
+    if (!canUploadRequested()) return;
+    const controller = new AbortController();
+    requestedUpload = controller;
+    saving.value = true;
+    error.value = exportStatus.value = '';
+    try {
+      // 只使用当前登录页面已有的匿名样本，不读取历史文件或成员填写的问题说明。
+      const text = await serializeDiagnosticReport(createReport(''));
+      if (controller.signal.aborted || closing) return;
+      const body = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+      if (controller.signal.aborted || closing) return;
+      await sendCompressedReport(body, controller.signal);
+      if (!disposed && !controller.signal.aborted) exportStatus.value = '已按服主请求上传本次诊断。';
+    } catch (cause) {
+      if (!disposed && !controller.signal.aborted) error.value = cause instanceof Error && cause.name !== 'TypeError'
+        ? cause.message : '自动上报失败，可手动上传日志。';
+    } finally {
+      requestedUpload = undefined;
+      saving.value = false;
+    }
+  }
+
+  async function sendCompressedReport(body: Blob, signal: AbortSignal) {
+    if (body.size > 8 * 1024 * 1024) throw new Error('日志压缩后超过 8 MiB，无法上传。');
+    const response = await authenticatedFetch('/api/diagnostics/reports', { method: 'POST', headers: { 'Content-Type': 'application/gzip' },
+      body, signal: AbortSignal.any([signal, AbortSignal.timeout(30 * 60_000)]) });
+    if (!response.ok) throw await readApiError(response);
+  }
+
   async function deliver(notes: string, destination: 'export' | 'owner') {
     if (disposed || saving.value || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
@@ -827,10 +872,7 @@ export function useDiagnosticReport(options: {
           body = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
         }
         if (disposed) return;
-        if (body.size > 8 * 1024 * 1024) throw new Error('日志压缩后超过 8 MiB，无法上传。');
-        const response = await authenticatedFetch('/api/diagnostics/reports', { method: 'POST', headers: { 'Content-Type': 'application/gzip' },
-          body, signal: AbortSignal.any([uploadLifetime.signal, AbortSignal.timeout(30 * 60_000)]) });
-        if (!response.ok) throw await readApiError(response);
+        await sendCompressedReport(body, uploadLifetime.signal);
         const skipped = unavailable ? `（${unavailable} 份历史报告无法读取）` : '';
         if (!disposed) exportStatus.value = `日志已上传给服主${skipped}。 ${exportStatus.value}`;
       } else if (window.lycanDesktop) {
@@ -857,12 +899,16 @@ export function useDiagnosticReport(options: {
     if (stored !== null && stored !== 'true' && stored !== 'false') throw new Error('invalidAutomaticDiagnosticsPreference');
     automaticEnabled.value = stored === null ? options.automaticDefault ?? Boolean(window.lycanDesktop) : stored === 'true';
   } catch { error.value = '无法读取自动诊断设置，已暂停自动记录；可手动开启。'; }
+  try {
+    const value = localStorage.getItem(REQUESTED_UPLOAD_KEY);
+    requestedUploadEnabled.value = value === null || value === 'true';
+  } catch { error.value = '无法读取自动上报设置，本次已关闭。'; }
   const save = (notes: string) => deliver(notes, 'export');
   const upload = (description = '') => deliver(description, 'owner');
-  onScopeDispose(() => uploadLifetime.abort());
+  onScopeDispose(() => { uploadLifetime.abort(); requestedUpload?.abort(); });
   if (automaticEnabled.value) start(true);
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
-  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem, recordRoomDisconnect,
+  return { latest, recording, requestedUploadEnabled, setRequestedUpload, canUploadRequested, uploadRequested, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem, recordRoomDisconnect,
     savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, upload, exportStatus, clearSaved, beginClose, flush };
 }

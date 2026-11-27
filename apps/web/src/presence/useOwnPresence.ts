@@ -9,7 +9,8 @@ const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_IDLE_CHECK_INTERVAL_MS = 2_000;
 
 // 当前账号的公开状态：串行同步隐私选择，并持有本机活动及闲置检测的清理责任。
-export function useOwnPresence(userId: string, visibility: { showActivity: Ref<boolean>; showLastOnline: Ref<boolean> }, desktop?: PresenceDesktop) {
+export function useOwnPresence(userId: string, visibility: { showActivity: Ref<boolean>; showLastOnline: Ref<boolean> }, desktop?: PresenceDesktop,
+  diagnosticUpload?: { available: () => boolean; send: () => Promise<void> }) {
   const { showActivity, showLastOnline } = visibility;
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
@@ -65,7 +66,11 @@ export function useOwnPresence(userId: string, visibility: { showActivity: Ref<b
         const activity = sharedActivity.value ? { type: sharedActivity.value.type, name: sharedActivity.value.name } : null;
         presenceSyncing.value = true;
         try {
-          await sendPresenceHeartbeat(status, activity, controller.signal, { showActivity: showActivity.value, showLastOnline: showLastOnline.value });
+          const requested = await sendPresenceHeartbeat(status, activity, controller.signal, {
+            showActivity: showActivity.value, showLastOnline: showLastOnline.value,
+            ...(diagnosticUpload?.available() ? { acceptDiagnosticRequest: true } : {}),
+          });
+          if (requested && !presenceStopped && !controller.signal.aborted) void diagnosticUpload?.send();
           if (!presenceStopped && !controller.signal.aborted && status === publicPresenceStatus.value) presenceSyncError.value = '';
         } catch {
           if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态设置尚未同步，将自动重试。';
