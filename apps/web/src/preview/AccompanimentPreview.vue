@@ -219,12 +219,12 @@ function setSourceOpen(source: Source, open: boolean) {
 .media-badge { position: absolute; bottom: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
-.spectrum-preview i { position: relative; height: 4px; visibility: hidden; transition: height 700ms linear, visibility 0s linear 780ms; }
+.spectrum-preview i { position: relative; height: 4px; visibility: hidden; transition: height 900ms linear, visibility 0s linear 1220ms; }
 .spectrum-preview.has-sound i { height: var(--band-height); visibility: visible; transition: none; }
 .spectrum-preview i::before, .spectrum-preview i::after { content: ''; position: absolute; inset-inline: 0; }
 .spectrum-preview i::before { bottom: 0; height: 100%; max-height: 4px; transition: max-height 400ms linear; background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); animation: spectrum-pulse 1.8s ease-in-out var(--phase) infinite paused; }
 .spectrum-preview.has-sound i::before { max-height: var(--band-height); transition: none; }
-.spectrum-preview i::after { bottom: 100%; height: min(2px, 100%); background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
+.spectrum-preview i::after { bottom: 100%; height: clamp(0px, calc(100% - 4px), 2px); background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
 .spectrum-preview.has-sound i::before, .spectrum-preview.has-sound i::after { animation-play-state: running; }
 @keyframes spectrum-pulse { 0%, 85%, 100% { clip-path: inset(calc(100% - 4px) 0 0); } 50% { clip-path: inset(0); } }
 @keyframes spectrum-peak { 0%, 100% { bottom: 2px; } 50%, 68% { bottom: calc(100% - 2px); } }

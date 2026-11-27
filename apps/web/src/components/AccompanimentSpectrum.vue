@@ -5,7 +5,7 @@ const props = defineProps<{ track?: MediaStreamTrack; context?: AudioContext | n
 const surface = ref<HTMLElement>();
 const visible = ref(false);
 const showBaseline = ref(false);
-let aboveBaselineLastFrame = false;
+let baselineFramesLeft = 0;
 const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const bands = Array.from({ length: 21 }, () => ({ height: 0, peak: 0, hold: 0 }));
 
@@ -35,7 +35,7 @@ watchEffect(onCleanup => {
       bars[i].style.removeProperty('--level');
       bars[i].style.removeProperty('--peak');
     });
-    aboveBaselineLastFrame = false;
+    baselineFramesLeft = 0;
     showBaseline.value = false;
     return;
   }
@@ -77,15 +77,15 @@ watchEffect(onCleanup => {
       const previousPeak = band.peak;
       if (height > 0 && height >= band.peak) { band.peak = height; band.hold = 3; }
       else if (band.hold > 0) band.hold--;
-      else band.peak = Math.max(height, band.peak - 5);
+      else band.peak = Math.max(height, band.peak - 4);
       if (height !== band.height) bars[i].style.setProperty('--level', height + 'px');
       if (band.peak !== previousPeak) bars[i].style.setProperty('--peak', band.peak + 'px');
       band.height = height;
       remaining ||= band.peak > 0;
     });
-    // 各频段共用底线；全部落到底的这一帧仍显示，下一次采样仍静音才一起隐藏。
-    const show = remaining || aboveBaselineLastFrame;
-    aboveBaselineLastFrame = remaining;
+    // 最后一条峰值落下后，整排底线再停留四次采样（320 ms）。
+    const show = remaining || baselineFramesLeft > 0;
+    baselineFramesLeft = remaining ? 4 : Math.max(0, baselineFramesLeft - 1);
     showBaseline.value = show;
     return show;
   }
@@ -108,5 +108,5 @@ watchEffect(onCleanup => {
 :global(.participant-media:has(.spectrum) .large-avatar) { z-index: 1; }
 .spectrum.has-baseline { --spectrum-baseline: 4px; }
 .spectrum i { position: relative; height: calc(var(--spectrum-baseline, 0px) + var(--level, 0px)); background: var(--muted); }
-.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--spectrum-baseline, 0px) + var(--peak, 0px) - 2px); height: 2px; background: var(--text); }
+.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--spectrum-baseline, 0px) + var(--peak, 0px) - 2px); height: min(2px, var(--peak, 0px)); background: var(--text); }
 </style>

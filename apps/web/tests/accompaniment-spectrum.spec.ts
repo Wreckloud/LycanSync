@@ -54,14 +54,21 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   const settling = await levels();
   expect(settling.peak).toBeGreaterThan(settling.height);
   await card.screenshot({ path: test.info().outputPath('settling.png') });
-  for (let tick = 0; tick < 24 && (await levels()).peak > 4; tick++) {
+  await page.clock.runFor(480);
+  const drifting = await levels();
+  expect(drifting.height).toBe(4);
+  expect(drifting.peak).toBeGreaterThan(drifting.height);
+  expect(drifting.peak).toBeLessThan(settling.peak);
+  await card.screenshot({ path: test.info().outputPath('peaks.png') });
+  for (let tick = 0; tick < 32 && (await levels()).peak > 4; tick++) {
     expect(Math.min(...await heights())).toBeGreaterThanOrEqual(4);
     await page.clock.runFor(80);
   }
   expect(await heights()).toEqual(Array(21).fill(4));
   expect((await levels()).peak).toBe(4);
+  expect(await spectrum.locator('i').evaluateAll(bars => bars.every(bar => getComputedStyle(bar, '::after').height === '0px'))).toBe(true);
   await card.screenshot({ path: test.info().outputPath('baseline.png') });
-  await page.clock.runFor(79);
+  await page.clock.runFor(319);
   expect(await heights()).toEqual(Array(21).fill(4));
   await page.clock.runFor(1);
   await expect(spectrum).toHaveCount(0);
