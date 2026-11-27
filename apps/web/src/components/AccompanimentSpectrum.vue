@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, onScopeDispose, ref, watchEffect } from 'vue';
 
-const props = defineProps<{ track: MediaStreamTrack; context: AudioContext; responsive?: boolean }>();
+const props = defineProps<{ track: MediaStreamTrack; context: AudioContext; responsive: boolean }>();
 const surface = ref<HTMLElement>();
 const visible = ref(false);
 const foreground = ref(!document.hidden);

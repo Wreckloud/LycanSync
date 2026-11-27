@@ -110,7 +110,7 @@ async function listenToFile(event: Event) {
             <AccompanimentSpectrum v-if="track && context" :track="track" :context="context" :responsive="responsive" />
           </Transition>
         </div>
-        <div class="participant-meta"><strong>{{ responsive ? '灵敏版' : '当前版' }}</strong></div>
+        <div class="participant-meta"><strong>{{ responsive ? '灵敏版（正式卡片）' : '基础版' }}</strong></div>
       </article>
     </div>
   </section>
