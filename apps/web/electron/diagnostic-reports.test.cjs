@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { mkdir, mkdtemp, readFile, rename, rm, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
+const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, prepareCheckpoint, validateReportText, receivedReportPath, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { createDiagnosticCopies } = require('./diagnostic-copies.cjs');
 const { readFileSync } = require('node:fs');
 const { runInNewContext } = require('node:vm');
@@ -152,6 +152,40 @@ test('清除排在在途保存之后，不会被旧写入恢复，清除后可�
   assert.equal((await createDiagnosticReportStore(directory).info()).clientVersion, 'fresh');
 });
 
+test('大小快照交替保存时共用历史轮换、事件过滤和退出等待；清理排在工作线程之后', async t => {
+  const { directory, store } = await fixture(t);
+  await store.save(savedReport('previous-session'));
+  const reopened = createDiagnosticReportStore(directory);
+  const data = screenReport('large', '2026-10-26T00:05:00Z', true);
+  data.samples[0].padding = 'x'.repeat(600 * 1024);
+  data.notes = 'private feedback';
+  const text = JSON.stringify(data);
+  const context = { logPath: join(directory, 'events.log'), startedAt: Date.parse(data.startedAt),
+    endedAt: Date.parse(data.endedAt), environment: { platform: 'win32' }, persistence: { savedAt: data.endedAt } };
+  await writeFile(context.logPath, [
+    JSON.stringify({ time: data.startedAt, stage: 'screenVideoPublished', message: 'private-path' }),
+    JSON.stringify({ time: '2026-10-27T00:00:00Z', stage: 'outside' }),
+  ].join('\n'));
+  const saving = reopened.checkpoint(text, context);
+  await reopened.flush();
+  assert.equal(await saving, Buffer.byteLength(await readFile(join(directory, 'current.json'), 'utf8')));
+  await reopened.checkpoint(report('small'), context);
+  const { reports } = await reopened.all();
+  assert.equal(reports.previous.runtime.clientVersion, 'previous-session');
+  assert.equal(reports.current.runtime.clientVersion, 'small');
+  assert.deepEqual(reports.lastScreenUsage.samples, data.samples);
+  assert.equal(reports.lastScreenUsage.notes, '');
+  assert.deepEqual(reports.lastScreenUsage.events.map(event => event.stage), ['screenVideoPublished']);
+  assert.ok(!JSON.stringify(reports.lastScreenUsage.events).includes('private-path'));
+  assert.deepEqual(reports.lastScreenUsage.environment, context.environment);
+  await mkdir(join(directory, 'current.pending'));
+  await assert.rejects(reopened.checkpoint(text, context), error => ['EISDIR', 'EPERM', 'EACCES'].includes(error.code));
+  assert.equal((await reopened.all()).reports.current.runtime.clientVersion, 'small');
+  await rm(join(directory, 'current.pending'), { recursive: true });
+  await Promise.all([reopened.checkpoint(text, context), reopened.clear()]);
+  assert.deepEqual((await reopened.all()).reports, {});
+});
+
 function ipcFixture() {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('diagnostics:checkpoint'");
@@ -163,14 +197,17 @@ function ipcFixture() {
     diagnosticReportsGeneration: 0, diagnosticStartedAt: Date.parse('2026-10-26T00:00:00Z'),
     saveDirectories: { exportDirectory: async () => resolve('/private', 'exports') },
     gzipReport: require('node:util').promisify(require('node:zlib').gzip),
-    trustedSender: event => event.trusted, parseDiagnosticReport, compactSavedSamples,
+    trustedSender: event => event.trusted, parseDiagnosticReport, validateReportText, compactSavedSamples,
     writeMediaDiagnostic: Object.assign(async entry => failures.push(entry), { flush: async () => {} }),
     Date, JSON, Error, resolve, mainWindow: {}, sessionRevision: 1, AbortController, diagnosticFileTask: undefined,
     diagnosticCopies: { async submit(json, check) { check(); const path = '/managed/report.json'; await state.writeFile(path, json); return path; } },
     process: { platform: 'win32', arch: 'x64', versions: { electron: 'current-electron' } }, osRelease: () => 'current-os',
     app: { getPath: () => '/private', getVersion: () => 'current-version', getGPUFeatureStatus: () => ({}) },
     readDiagnosticEvents: async () => [{ stage: 'current-start' }],
-    savedDiagnosticReports: { save: async report => { saved.push(report); return Buffer.byteLength(JSON.stringify(report)); }, info: async () => null,
+    savedDiagnosticReports: { async checkpoint(text, context) {
+      const report = await prepareCheckpoint(text, { ...context, logPath: join(__dirname, 'nonexistent-fixture.log') });
+      saved.push(report); return Buffer.byteLength(JSON.stringify(report));
+    }, info: async () => null,
       all: async () => ({ reports: { previous: { ...JSON.parse(report('old-version')), environment: { appVersion: 'old-version' },
         events: [{ stage: 'old-start' }] } }, unavailable: [] }), clear: async () => { cleared++; } },
     mkdir: async directory => exportDirectories.push(directory),
@@ -310,12 +347,12 @@ test('保存只接受可信页面且不落盘体验说明，上次导出不混�
   assert.equal(dialogOptions.length, 0);
 });
 
-test('清除使尚在补齐事件的旧快照失效，清除后不会被迟到结果写回', async () => {
+test('清除使尚在等待事件落盘的旧快照失效，清除后不会被迟到结果写回', async () => {
   const { state, handlers, saved, cleared } = ipcFixture();
   let finish;
   let entered;
   const reading = new Promise(resolveEntered => { entered = resolveEntered; });
-  state.readDiagnosticEvents = () => new Promise(resolveEvents => { finish = resolveEvents; entered(); });
+  state.writeMediaDiagnostic.flush = () => new Promise(resolveEvents => { finish = resolveEvents; entered(); });
   const checkpoint = handlers.get('diagnostics:checkpoint')({ trusted: true }, report('old'));
   await reading;
   await handlers.get('diagnostics:clear-saved')({ trusted: true });
@@ -342,7 +379,7 @@ test('合并导出读取三种已保存的快照，单份损坏时保留其余�
 
 test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘错误伪报成功', async () => {
   const { state, handlers, failures } = ipcFixture();
-  state.savedDiagnosticReports.save = async () => { throw Object.assign(new Error('private-path'), { code: 'ENOSPC' }); };
+  state.savedDiagnosticReports.checkpoint = async () => { throw Object.assign(new Error('private-path'), { code: 'ENOSPC' }); };
   await assert.rejects(handlers.get('diagnostics:checkpoint')({ trusted: true }, report('current')), /private-path/);
   assert.deepEqual(JSON.parse(JSON.stringify(failures)), [{ stage: 'diagnosticSnapshotFailed', storageError: 'ENOSPC' }]);
 });

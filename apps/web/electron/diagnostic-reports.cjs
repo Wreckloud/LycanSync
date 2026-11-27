@@ -2,6 +2,8 @@ const { mkdir, open, rename, unlink, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
 const { isDeepStrictEqual } = require('node:util');
+const { Worker } = require('node:worker_threads');
+const { readDiagnosticEvents } = require('./media-diagnostics.cjs');
 
 const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 const reportIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,8 +16,14 @@ function receivedReportPath(directory, id, userId, uploadedAt) {
   return join(directory, userId, new Date(uploadedAt).toLocaleDateString('sv-SE'), name);
 }
 
+function validateReportText(text) {
+  const bytes = typeof text === 'string' ? Buffer.byteLength(text) : Infinity;
+  if (bytes > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
+  return bytes;
+}
+
 function parseDiagnosticReport(text) {
-  if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
+  validateReportText(text);
   return validateDiagnosticReport(JSON.parse(text));
 }
 
@@ -37,6 +45,18 @@ function serializeDiagnosticReport(report) {
   const text = JSON.stringify(report);
   if (Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
   return text;
+}
+
+async function prepareCheckpoint(text, { startedAt, endedAt, logPath, environment, persistence }) {
+  const report = parseDiagnosticReport(text);
+  const start = Math.min(startedAt, Date.parse(report.startedAt));
+  report.notes = '';
+  report.events = await readDiagnosticEvents(logPath, start, endedAt);
+  report.eventWindow = { startedAt: new Date(start).toISOString(), endedAt: new Date(endedAt).toISOString() };
+  report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至快照最近200项；不含异常正文';
+  report.environment = environment;
+  report.persistence = persistence;
+  return report;
 }
 
 // 只在合并导出时引用相同采样。各磁盘快照始终独立，历史标记、版本和事件仍归各自报告。
@@ -77,14 +97,12 @@ function lastScreenActivity(report) {
 }
 
 // 复用有界报告，画面结束后额外固定保留最近一次；不另建采样器或无限历史。
-function createDiagnosticReportStore(directory) {
+function createDiagnosticReportStore(directory, state = { savedThisRun: false, retainedScreenTime: undefined }) {
   const current = join(directory, 'current.json');
   const previous = join(directory, 'previous.json');
   const temporary = join(directory, 'current.pending');
   const screenUsage = join(directory, 'last-screen-usage.json');
   const screenTemporary = join(directory, 'last-screen-usage.pending');
-  let retainedScreenTime;
-  let savedThisRun = false;
   let pending = Promise.resolve();
 
   function serialize(action) {
@@ -115,17 +133,17 @@ function createDiagnosticReportStore(directory) {
 
   async function retainScreenReport(report) {
     const time = lastScreenActivity(report);
-    if (time === null || retainedScreenTime !== null && time <= retainedScreenTime) return;
+    if (time === null || state.retainedScreenTime !== null && time <= state.retainedScreenTime) return;
     const retained = { ...report, persistence: { ...report.persistence,
       retainedScreenUsage: true, lastScreenActivityAt: new Date(time).toISOString() } };
     const text = serializeDiagnosticReport(retained);
     await writeFile(screenTemporary, text, 'utf8');
     await rename(screenTemporary, screenUsage);
-    retainedScreenTime = time;
+    state.retainedScreenTime = time;
   }
   async function previousReport() {
     // 本次尚未采样时 current 仍属于上次启动；只打开设置不能覆盖它。
-    const prior = savedThisRun ? await read(previous) : (await read(current)) ?? await read(previous);
+    const prior = state.savedThisRun ? await read(previous) : (await read(current)) ?? await read(previous);
     const retained = await read(screenUsage);
     const retainedTime = lastScreenActivity(retained?.report);
     const priorTime = lastScreenActivity(prior?.report);
@@ -136,32 +154,55 @@ function createDiagnosticReportStore(directory) {
     return retainedTime !== null && (priorTime === null || retainedTime >= priorTime) ? retained : prior;
   }
 
+  async function writeSnapshot(report, text) {
+    await mkdir(directory, { recursive: true });
+    if (state.retainedScreenTime === undefined) state.retainedScreenTime = lastScreenActivity((await read(screenUsage))?.report);
+    if (!state.savedThisRun) {
+      const prior = (await read(current)) ?? await read(previous);
+      if (lastScreenActivity(prior?.report) === null) {
+        const older = await read(previous);
+        if (older) await retainScreenReport(older.report);
+      }
+      if (prior) await retainScreenReport(prior.report);
+    }
+    // 首个无画面的快照固定完整使用窗口，后续空闲不能逐步冲掉它。
+    if (!hasScreenMedia(report.samples.at(-1))) await retainScreenReport(report);
+    await writeFile(temporary, text, 'utf8');
+    if (!state.savedThisRun) {
+      try { await rename(current, previous); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      state.savedThisRun = true;
+    }
+    await rename(temporary, current);
+    return Buffer.byteLength(text);
+  }
+
   return {
+    checkpoint(text, context) {
+      const bytes = validateReportText(text);
+      // 小快照直接保存；大快照的解析、轮换和写入在本次工作线程内完成，结束后释放堆。
+      if (bytes < 512 * 1024) return serialize(async () => {
+        const report = await prepareCheckpoint(text, context);
+        return writeSnapshot(report, serializeDiagnosticReport(report));
+      });
+      return serialize(() => new Promise((resolve, reject) => {
+        const entry = require.resolve('./diagnostic-checkpoint.cjs').replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+        const worker = new Worker(entry, { workerData: { directory, state, text, context } });
+        let reply;
+        worker.once('message', message => { reply = message; });
+        worker.once('error', reject);
+        worker.once('exit', code => {
+          if (!reply) return reject(new Error('诊断保存线程已退出：' + code));
+          Object.assign(state, reply.state);
+          if (reply.error) reject(Object.assign(new Error(reply.error.message), { code: reply.error.code }));
+          else resolve(reply.bytes);
+        });
+      }));
+    },
     save(report) {
       validateDiagnosticReport(report);
       const text = serializeDiagnosticReport(report);
-      return serialize(async () => {
-        await mkdir(directory, { recursive: true });
-        if (retainedScreenTime === undefined) retainedScreenTime = lastScreenActivity((await read(screenUsage))?.report);
-        if (!savedThisRun) {
-          const prior = (await read(current)) ?? await read(previous);
-          if (lastScreenActivity(prior?.report) === null) {
-            const older = await read(previous);
-            if (older) await retainScreenReport(older.report);
-          }
-          if (prior) await retainScreenReport(prior.report);
-        }
-        // 首个无画面的快照固定完整使用窗口，后续空闲不能逐步冲掉它。
-        if (!hasScreenMedia(report.samples.at(-1))) await retainScreenReport(report);
-        await writeFile(temporary, text, 'utf8');
-        if (!savedThisRun) {
-          try { await rename(current, previous); }
-          catch (error) { if (error.code !== 'ENOENT') throw error; }
-          savedThisRun = true;
-        }
-        await rename(temporary, current);
-        return Buffer.byteLength(text);
-      });
+      return serialize(() => writeSnapshot(report, text));
     },
     all: () => serialize(async () => {
       const reports = {};
@@ -190,10 +231,10 @@ function createDiagnosticReportStore(directory) {
         try { await unlink(path); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
-      savedThisRun = false; retainedScreenTime = null;
+      state.savedThisRun = false; state.retainedScreenTime = null;
     }),
     flush: () => pending,
   };
 }
 
-module.exports = { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, receivedReportPath, reportIdPattern };
+module.exports = { prepareCheckpoint, validateReportText, compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, receivedReportPath, reportIdPattern };

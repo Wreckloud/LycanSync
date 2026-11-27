@@ -26,7 +26,7 @@ const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader, observeVoiceSignalFailures } = require('./media-diagnostics.cjs');
-const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, reportIdPattern } = require('./diagnostic-reports.cjs');
+const { validateReportText, compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { createWindowThumbnailLoader } = require('./native-window-thumbnails.cjs');
@@ -1041,22 +1041,19 @@ ipcMain.handle('diagnostics:process-metrics', (event) => {
 ipcMain.handle('diagnostics:checkpoint', async (event, text) => {
   if (!trustedSender(event) || allowQuitAfterMediaHelper) throw new Error('当前不能保存诊断。');
   const generation = diagnosticReportsGeneration;
-  const report = parseDiagnosticReport(text);
-  // 自动落盘不保存手填说明；事件沿用导出的固定字段与错误码过滤。
-  report.notes = '';
+  validateReportText(text);
   await writeMediaDiagnostic.flush();
-  const eventStartedAt = Math.min(diagnosticStartedAt, Date.parse(report.startedAt));
-  const eventEndedAt = Date.now();
-  report.events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'), eventStartedAt, eventEndedAt);
-  report.eventWindow = { startedAt: new Date(eventStartedAt).toISOString(), endedAt: new Date(eventEndedAt).toISOString() };
-  report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至快照最近200项；不含异常正文';
-  report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
-    platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(), gpuUtilization: null };
-  report.persistence = { savedAt: new Date().toISOString(), checkpointIntervalMs: 15_000,
-    storage: 'installation-data-directory', unexpectedExitMayLoseLastInterval: true };
+  const endedAt = Date.now();
   if (generation !== diagnosticReportsGeneration) return null;
-  try { return await savedDiagnosticReports.save(report); }
-  catch (error) {
+  try {
+    const bytes = await savedDiagnosticReports.checkpoint(text, { startedAt: diagnosticStartedAt, endedAt,
+      logPath: resolve(app.getPath('userData'), 'screen-share-error.log'),
+      environment: { appVersion: app.getVersion(), electronVersion: process.versions.electron,
+        platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(), gpuUtilization: null },
+      persistence: { savedAt: new Date().toISOString(), checkpointIntervalMs: 15_000,
+        storage: 'installation-data-directory', unexpectedExitMayLoseLastInterval: true } });
+    return generation === diagnosticReportsGeneration ? bytes : null;
+  } catch (error) {
     void writeMediaDiagnostic({ stage: 'diagnosticSnapshotFailed',
       storageError: ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EBUSY'].includes(error.code) ? error.code : 'unknown' });
     throw error;

@@ -18,6 +18,7 @@ module.exports = {
   extraMetadata: { main: 'electron/main.cjs' },
   afterPack: context => prepareInstallerFiles(context.appOutDir, context.packager.info.buildResourcesDir),
   publish: { provider: 'generic', url: updateUrl },
+  asarUnpack: ['electron/diagnostic-checkpoint.cjs', 'electron/diagnostic-reports.cjs', 'electron/media-diagnostics.cjs'],
   files: [
     'dist/**/*',
     'electron/main.cjs',
@@ -56,6 +57,7 @@ module.exports = {
     'electron/recording-voice.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',
+    'electron/diagnostic-checkpoint.cjs',
     'electron/diagnostic-copies.cjs',
     'electron/save-directories.cjs',
     'electron/native-video-thumbnails.cjs',
