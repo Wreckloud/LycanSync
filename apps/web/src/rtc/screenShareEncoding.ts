@@ -46,7 +46,7 @@ export async function applyScreenShareEncoding(sender: RTCRtpSender, limits: Scr
 
 export function screenShareEncodingLimits(id: ScreenShareQualityId, current: ScreenShareEncodingLimits,
   dimensions: { width: number; height: number }, custom?: CustomScreenShareQuality): ScreenShareEncodingLimits {
-  const quality = screenShareQuality(id, custom);
+  const quality = screenShareQuality(id, custom, dimensions);
   const scale = Math.min(1, quality.width / dimensions.width, quality.height / dimensions.height);
   const scaled = { width: Math.round(dimensions.width * scale), height: Math.round(dimensions.height * scale) };
   const degradationPreference = screenShareDegradationPreference(id, custom);

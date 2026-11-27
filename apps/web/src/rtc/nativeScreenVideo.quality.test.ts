@@ -106,6 +106,21 @@ it('1440p120 传到原生并接收真实尺寸，保留同一轨道及 SDK 的�
   } finally { await session.stop(); }
 });
 
+it.each([false, true])('按实际画面恢复推荐码率，单层和双层都保留目标帧率（双层 %s）', async dualLayer => {
+  const { session, sender, track, sendFrame } = await createSession(dualLayer);
+  try {
+    await session.configureQuality('custom', { resolution: 1440, fps: 60 });
+    // 升档后即使来源仍是原来的 1080p，也要在尺寸稳定后校正预算。
+    for (const [width, height, bitrate] of [[1920, 1080, 12_000_000], [2560, 1440, 20_000_000], [1280, 720, 5_000_000]]) {
+      await sendFrame(width, height);
+      await vi.waitFor(() => {
+        expect(sender.getParameters().encodings.at(-1)).toMatchObject({ maxBitrate: bitrate, maxFramerate: 60 });
+        expect(track.publishOptions.screenShareEncoding.maxBitrate).toBe(bitrate);
+      }, { timeout: 2000 });
+    }
+  } finally { await session.stop(); }
+});
+
 it('保留小窗口的整数缩放比，并同步 SDK 重发布参数', async () => {
   const { session, sender, track, sendFrame } = await createSession(true);
   try {
@@ -113,6 +128,26 @@ it('保留小窗口的整数缩放比，并同步 SDK 重发布参数', async ()
     await session.configureQuality('highFrameRate');
     expect(sender.getParameters().encodings[0].scaleResolutionDownBy).toBe(2);
     expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [{ width: 301, height: 451 }] });
+  } finally { await session.stop(); }
+});
+
+it('从三层标准档热切推荐后，缩小来源也同步重发布的低层上限', async () => {
+  const { session, sender, track, sendFrame } = await createSession(true);
+  try {
+    const parameters = sender.getParameters();
+    parameters.encodings.push({ ...parameters.encodings[1], rid: 'f' });
+    parameters.encodings[1].active = false;
+    await sender.setParameters(parameters);
+    await session.configureQuality('custom', { resolution: 1080, fps: 30 });
+    await sendFrame(1280, 720);
+    await vi.waitFor(() => {
+      expect(sender.getParameters().encodings).toMatchObject([
+        { maxBitrate: 750_000 }, { maxBitrate: 1_500_000, active: false }, { maxBitrate: 3_000_000 },
+      ]);
+      expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [
+        { encoding: { maxBitrate: 750_000 } }, { encoding: { maxBitrate: 1_500_000 } },
+      ] });
+    }, { timeout: 2000 });
   } finally { await session.stop(); }
 });
 

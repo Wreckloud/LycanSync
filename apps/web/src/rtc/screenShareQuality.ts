@@ -1,6 +1,6 @@
 import { VideoPreset } from 'livekit-client';
 
-// 自定义未手填码率时，按所选尺寸和帧率给出上限。
+// 自定义档的码率上限按输出像素数和所选帧率分档。
 const RECOMMENDED_BITRATES = {
   720: { 30: 3_000_000, 60: 5_000_000, 120: 8_000_000 },
   1080: { 30: 8_000_000, 60: 12_000_000, 120: 20_000_000 },
@@ -43,20 +43,33 @@ export function validateCustomScreenShareQuality(value: CustomScreenShareQuality
     ...(value.bitrateMbps !== undefined ? { bitrateMbps: value.bitrateMbps } : {}) };
 }
 
-export function screenShareQuality(id: ScreenShareQualityId, custom = DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY) {
+function customScreenShareBitrate(custom: CustomScreenShareQuality, frame?: { width: number; height: number }) {
+  if (custom.bitrateMbps !== undefined) return custom.bitrateMbps * 1_000_000;
+  let resolution = custom.resolution;
+  if (frame && frame.width > 0 && frame.height > 0) {
+    const pixels = frame.width * frame.height;
+    if (pixels <= 1280 * 720) resolution = 720;
+    else if (pixels <= 1920 * 1080 && resolution === 1440) resolution = 1080;
+  }
+  return RECOMMENDED_BITRATES[resolution][custom.fps];
+}
+
+export function screenShareQuality(id: ScreenShareQualityId, custom = DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
+  frame?: { width: number; height: number }) {
   const quality = SCREEN_SHARE_QUALITIES.find((quality) => quality.id === id);
   if (!quality) throw new Error('invalidScreenShareQuality');
   if (id === 'custom') {
-    const { resolution, fps, bitrateMbps } = validateCustomScreenShareQuality(custom);
-    const bitrate = bitrateMbps !== undefined ? bitrateMbps * 1_000_000 : RECOMMENDED_BITRATES[resolution][fps];
+    const { resolution, fps } = validateCustomScreenShareQuality(custom);
+    const bitrate = customScreenShareBitrate(custom, frame);
     return { ...quality, width: resolution * 16 / 9, height: resolution, fps, bitrate,
       description: `${resolution}p · ${fps} FPS` };
   }
   return quality;
 }
 
-export function screenShareVideoPreset(id: ScreenShareQualityId, custom = DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY) {
-  const quality = screenShareQuality(id, custom);
+export function screenShareVideoPreset(id: ScreenShareQualityId, custom = DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
+  frame?: { width: number; height: number }) {
+  const quality = screenShareQuality(id, custom, frame);
   return new VideoPreset(quality.width, quality.height, quality.bitrate, quality.fps, 'medium');
 }
 

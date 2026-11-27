@@ -1645,7 +1645,7 @@ describe('room media lifecycle', () => {
     { quality: 'economy', fps: 30, bitrate: 2_000_000, degradation: 'maintain-resolution' },
     { quality: 'standard', fps: 60, bitrate: 6_000_000, degradation: 'maintain-resolution' },
     { quality: 'highFrameRate', fps: 60, bitrate: 10_000_000, degradation: 'maintain-framerate' },
-    { quality: 'custom', fps: 60, bitrate: 12_000_000, degradation: 'maintain-framerate' },
+    { quality: 'custom', fps: 60, bitrate: 5_000_000, degradation: 'maintain-framerate' },
   ] as const)('passes the $quality selection to native capture and publication', async ({ quality, fps, bitrate, degradation }) => {
     configureNativeScreenDesktop();
     rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:test:0', shareAudio: false, quality });

@@ -21,6 +21,16 @@ it('画质保留三个预设，自定义固定在最后，帧率最高 120', () 
   expect(SCREEN_SHARE_RESOLUTIONS).toEqual([1440, 1080, 720]);
 });
 
+it('推荐上限按实际像素分档，保留竖屏、档位上限、未知首帧和手填码率的语义', () => {
+  const custom = { resolution: 1440, fps: 60 } as const;
+  const portrait = { width: 1080, height: 1920 };
+  expect(screenShareVideoPreset('custom', custom, portrait).encoding.maxBitrate).toBe(12_000_000);
+  expect(screenShareQuality('custom', custom, { width: 1922, height: 1080 }).bitrate).toBe(20_000_000);
+  expect(screenShareQuality('custom', custom).bitrate).toBe(20_000_000);
+  expect(screenShareQuality('custom', { ...custom, resolution: 720 }, portrait).bitrate).toBe(5_000_000);
+  expect(screenShareQuality('custom', { ...custom, bitrateMbps: 24 }, portrait).bitrate).toBe(24_000_000);
+});
+
 it('同为 1080p60 时，游戏与文档给弱网观看者不同的中层预算', () => {
   const dimensions = { width: 1920, height: 1080 };
   expect(screenShareLowerLayers(dimensions, true, 6_000_000, 'maintain-resolution')[1]).toMatchObject({

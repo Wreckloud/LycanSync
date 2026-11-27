@@ -1110,7 +1110,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     let capturedTracks: LocalTrack[] = [];
     let selectedQuality = options?.screenShareQuality ?? 'standard';
     let selectedCustomQuality = validateCustomScreenShareQuality(currentCustomScreenShareQuality.value);
-    let sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
     let nativeVideo: NativeScreenVideoSession | null = null;
     let shareResource: ScreenShareResource | null = null;
     let nativeAudio: NativeScreenAudioSession | null = null;
@@ -1221,12 +1220,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         const { sourceId } = selection;
         selectedQuality = selection.quality ?? selectedQuality;
         selectedCustomQuality = validateCustomScreenShareQuality(selection.customQuality ?? selectedCustomQuality);
-        sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
         const selectedProfile = screenShareQuality(selectedQuality, selectedCustomQuality);
         nativeSourceId = sourceId;
         const kind = sourceId.startsWith('monitor:') ? 'monitor' : 'window';
         nativeVideo = new NativeScreenVideoSession(desktop, {
           maxFps: selectedProfile.fps,
+          recommendedQuality: selectedQuality === 'custom' && selectedCustomQuality.bitrateMbps === undefined ? selectedCustomQuality : undefined,
           captureSettings: selection.captureSettings,
           resolution: { width: selectedProfile.width, height: selectedProfile.height },
           contentHint: screenShareContentHint(selectedQuality, selectedCustomQuality),
@@ -1316,7 +1315,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         capturedTracks = await participant.createScreenTracks({
           audio: false,
           contentHint: screenShareContentHint(selectedQuality, selectedCustomQuality),
-          resolution: sharePreset.resolution,
+          resolution: screenShareVideoPreset(selectedQuality, selectedCustomQuality).resolution,
         });
         if (!isCurrentTask()) return;
       }
@@ -1332,7 +1331,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       });
       const publishResults = await Promise.allSettled(capturedTracks.map((track) => {
         if (track.source === Track.Source.ScreenShare || (nativeVideo && track === nativeVideo.track)) {
-          const dimensions = nativeVideo?.frameDimensions ?? track.dimensions;
+          const nativeFrame = nativeVideo?.frameDimensions;
+          const sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality, nativeFrame);
+          const dimensions = nativeFrame ?? track.dimensions;
           const middle = canPublishScreenShareMiddleLayer(selectedQuality, dimensions);
           const degradationPreference = screenShareDegradationPreference(selectedQuality, selectedCustomQuality);
           return participant.publishTrack(track, {

@@ -1,7 +1,7 @@
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
-import { SCREEN_SHARE_LOWER_LAYER_FPS, screenShareContentHint, screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_LOWER_LAYER_FPS, screenShareContentHint, screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
 import { applyScreenShareEncoding, hasScreenShareSimulcast, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
@@ -25,6 +25,7 @@ type GeneratedVideoTrack = MediaStreamTrack & {
 
 interface NativeScreenVideoOptions {
   maxFps: number;
+  recommendedQuality?: CustomScreenShareQuality;
   captureSettings?: ScreenSharePreferences;
   resolution?: { width: number; height: number };
   contentHint?: 'motion' | 'detail';
@@ -80,6 +81,7 @@ export class NativeScreenVideoSession {
   private readonly generator: GeneratedVideoTrack;
   private readonly writer: WritableStreamDefaultWriter<VideoFrame>;
   private maxFps: number;
+  private recommendedQuality?: CustomScreenShareQuality;
   private captureFrameRate: number;
   private deliveryFrameRate: number;
   private resolution: { width: number; height: number };
@@ -154,6 +156,7 @@ export class NativeScreenVideoSession {
       throw new Error('invalidNativeVideoFrameRate');
     }
     this.maxFps = options.maxFps;
+    this.recommendedQuality = options.recommendedQuality;
     this.deliveryFrameRate = options.maxFps;
     this.captureSettings = options.captureSettings ? { ...options.captureSettings } : undefined;
     this.captureFrameRate = options.maxFps;
@@ -217,7 +220,10 @@ export class NativeScreenVideoSession {
     let lowerLayersOnly = false;
     try {
       const sender = this.track.sender;
-      if (sender !== this.lastDemandSender) this.lowerLayerDemandSince = undefined;
+      if (sender !== this.lastDemandSender) {
+        this.lowerLayerDemandSince = undefined;
+        if (sender && this.recommendedQuality) this.scheduleLayerResize();
+      }
       this.lastDemandSender = sender;
       const encodings = sender?.getParameters().encodings;
       // 主层明确暂停后，预览和中层最多需要 30 帧；层状态未知时保留用户目标。
@@ -342,9 +348,10 @@ export class NativeScreenVideoSession {
       // 手动画质优先；先收口已发送的节流请求，不与同一宿主的配置命令竞争。
       if (this.demandChange) await this.demandChange;
       await this.applyQuality(id, custom);
+      this.recommendedQuality = id === 'custom' && custom?.bitrateMbps === undefined ? custom ?? DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY : undefined;
     } finally {
       this.configuring = false;
-      if (this.layerResizeTimer !== undefined) this.scheduleLayerResize();
+      if (this.layerResizeTimer !== undefined || this.recommendedQuality) this.scheduleLayerResize();
       this.lowerLayerDemandSince = undefined;
       this.lastDemandCheck = Number.NEGATIVE_INFINITY;
     }
@@ -367,7 +374,8 @@ export class NativeScreenVideoSession {
     )) ? frame : quality;
     let nativeRequested = false;
     try {
-      await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits, dimensions, custom));
+      const limits = screenShareEncodingLimits(id, previousLimits, dimensions, custom);
+      await applyScreenShareEncoding(sender, limits);
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       // 只改编码预算不重置 OBS，避免无必要的停帧和纹理重建。
       if (quality.fps !== previousFps || resolutionChanged) {
@@ -384,13 +392,14 @@ export class NativeScreenVideoSession {
       this.generator.contentHint = screenShareContentHint(id, custom);
       // SDK 重发布使用当前配置，不能重新套用最初发布时的画质。
       if (this.track.publishOptions) {
+        const bitrate = limits.encodings[limits.encodings.length - 1].maxBitrate!;
         // SDK 对 ScreenShare 单独读取 screenShareEncoding，不能写入摄像头编码字段。
         this.track.publishOptions.screenShareEncoding = {
-          maxBitrate: quality.bitrate, maxFramerate: quality.fps, priority: 'high',
+          maxBitrate: bitrate, maxFramerate: quality.fps, priority: 'high',
         };
         this.track.publishOptions.degradationPreference = screenShareDegradationPreference(id, custom);
         this.track.publishOptions.screenShareSimulcastLayers = screenShareLowerLayers(dimensions,
-          previousLimits.encodings.length === 3, quality.bitrate, this.track.publishOptions.degradationPreference);
+          previousLimits.encodings.length === 3, bitrate, this.track.publishOptions.degradationPreference);
       }
     } catch (error) {
       if (!this.stopped) {
@@ -548,7 +557,7 @@ export class NativeScreenVideoSession {
     }
     if (Number.isInteger(frame.displayWidth) && frame.displayWidth > 0
         && Number.isInteger(frame.displayHeight) && frame.displayHeight > 0
-        && (this.frameWidth !== frame.displayWidth || this.frameHeight !== frame.displayHeight)) {
+        && (!this.submittedFrames || this.frameWidth !== frame.displayWidth || this.frameHeight !== frame.displayHeight)) {
       this.frameWidth = frame.displayWidth;
       this.frameHeight = frame.displayHeight;
       if (this.track.sender) this.scheduleLayerResize();
@@ -584,7 +593,7 @@ export class NativeScreenVideoSession {
   private scheduleLayerResize(): void {
     clearTimeout(this.layerResizeTimer);
     if (this.stopped) return;
-    // 窗口停止变化后按新尺寸更新各层的缩放，保留 SDK 决定的启停和码率。
+    // 窗口停止变化后再调整分层和推荐码率，避免拖动时反复更新编码器。
     this.layerResizeTimer = setTimeout(() => {
       if (this.configuring) return;
       this.layerResizeTimer = undefined;
@@ -601,19 +610,29 @@ export class NativeScreenVideoSession {
     const parameters = sender.getParameters();
     const encodings = parameters.encodings;
     const dimensions = this.frameDimensions;
-    if (!dimensions || !hasScreenShareSimulcast(encodings)) return;
-    const bitrate = encodings.at(-1)?.maxBitrate;
+    if (!dimensions || (encodings.length !== 1 && !hasScreenShareSimulcast(encodings))) return;
+    const main = encodings[encodings.length - 1];
+    const bitrate = this.recommendedQuality ? screenShareQuality('custom', this.recommendedQuality, dimensions).bitrate : main.maxBitrate;
     if (!bitrate) return;
-    const layers = screenShareLowerLayers(dimensions, encodings.length === 3, bitrate, options.degradationPreference);
-    let changed = false;
+    const layers = encodings.length > 1
+      ? screenShareLowerLayers(dimensions, encodings.length === 3, bitrate, options.degradationPreference) : [];
+    let changed = main.maxBitrate !== bitrate;
+    if (changed) main.maxBitrate = bitrate;
     layers.forEach((layer, index) => {
-      const scale = Math.max(1, Math.min(this.frameWidth, this.frameHeight) / Math.min(layer.width, layer.height));
-      if (encodings[index].scaleResolutionDownBy === scale) return;
-      encodings[index].scaleResolutionDownBy = scale;
+      const encoding = encodings[index];
+      if (this.recommendedQuality && encoding.maxBitrate !== layer.encoding.maxBitrate) {
+        encoding.maxBitrate = layer.encoding.maxBitrate;
+        changed = true;
+      }
+      const scale = Math.max(1, Math.min(dimensions.width, dimensions.height) / Math.min(layer.width, layer.height));
+      if (encoding.scaleResolutionDownBy === scale) return;
+      encoding.scaleResolutionDownBy = scale;
       changed = true;
     });
     if (changed) await sender.setParameters(parameters);
-    if (!this.stopped && this.track.sender === sender) options.screenShareSimulcastLayers = layers;
+    if (this.stopped || this.track.sender !== sender) return;
+    if (options.screenShareEncoding && this.recommendedQuality) options.screenShareEncoding.maxBitrate = bitrate;
+    if (encodings.length > 1) options.screenShareSimulcastLayers = layers;
   }
 
   private writeSuspendedFrame(): void {
