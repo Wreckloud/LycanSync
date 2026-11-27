@@ -244,7 +244,7 @@ async function enqueueFiles(files: File[], sendAsImageMessage: boolean) {
     const image = file.type === 'image/png' || file.type === 'image/jpeg';
     const item = reactive<PendingAttachment>({ id: crypto.randomUUID(), kind: image && sendAsImageMessage ? 'IMAGE' : 'FILE',
       file, originalFile: image ? file : undefined, previewUrl: '', preparing: true });
-    if (image || attachmentKind(item) === 'video') item.sendOriginal = false;
+    if (image) item.sendOriginal = false;
     return prepareAttachment(item);
   }));
 }
@@ -278,7 +278,7 @@ watch(() => props.recordingAttachment, async entry => {
   emit('recordingConsumed');
   const item = reactive<PendingAttachment>({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
     file: { name: entry.fileName || `${entry.applicationName || '录像'}.mkv`, size: entry.bytes! },
-    previewUrl: '', sendOriginal: false, preparing: true });
+    previewUrl: '', preparing: true });
   await prepareAttachment(item);
   await nextTick();
   if (pendingAttachments.value.includes(item)) { resizeMessageInput(); messageInput.value?.focus(); }
@@ -327,7 +327,6 @@ async function submit(restoreFocus = false) {
     const attachment: DraftAttachment = draft.recordingId !== undefined
       ? { id: draft.id, recordingId: draft.recordingId, kind: 'FILE', file: draft.file, previewUrl: draft.previewUrl }
       : { id: draft.id, kind: draft.sendOriginal ? 'FILE' : draft.kind, file: draft.file, previewUrl: draft.previewUrl, thumbnail: draft.thumbnail };
-    attachment.optimizeVideo = attachmentKind(draft) === 'video' && !draft.sendOriginal;
     transfers.enqueue(groupId, index === 0 ? content : '', attachment);
   });
   else transfers.enqueue(groupId, content);

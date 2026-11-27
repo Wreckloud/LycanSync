@@ -2,7 +2,7 @@
 import { onMounted, onScopeDispose, ref } from 'vue';
 import { Download, X } from '@lucide/vue';
 
-defineProps<{ source: string; downloadable?: boolean; downloading?: boolean; bufferForPreview?: boolean }>();
+defineProps<{ source: string; downloadable?: boolean; downloading?: boolean; bufferForPreview?: boolean; autoplay?: boolean }>();
 const emit = defineEmits<{ close: []; download: []; error: [code?: number]; metadata: [duration: number]; time: [seconds: number]; buffered: [percent: number]; playable: [] }>();
 const player = ref<HTMLVideoElement | null>(null);
 const aspectRatio = ref(16 / 9);
@@ -45,11 +45,13 @@ onScopeDispose(() => {
   <div class="media-video-surface">
     <button ref="closeButton" type="button" class="media-viewer-close" aria-label="关闭查看器" title="关闭查看器" @click="emit('close')"><X :size="24" /></button>
     <div class="media-video-stage">
-      <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline :preload="bufferForPreview ? 'auto' : 'metadata'" tabindex="0"
+      <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline :autoplay="autoplay" :preload="bufferForPreview ? 'auto' : 'metadata'" tabindex="0"
         @progress="bufferForPreview && reportBuffer()" @canplay="emit('playable')" @timeupdate="emit('time', player?.currentTime ?? 0)" @loadedmetadata="measureVideo" @error="playbackFailed" />
+      <slot v-else name="unplayable" />
     </div>
     <slot name="controls" />
     <div v-if="downloadable" class="media-viewer-tools">
+      <slot name="tools" />
       <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading" @click="emit('download')"><Download :size="20" /></button>
     </div>
   </div>

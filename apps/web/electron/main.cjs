@@ -684,7 +684,6 @@ async function serveApplication(request) {
           ...(groupFileMediaPath.test(url.pathname) && request.headers.has('Range') ? { Range: request.headers.get('Range') } : {}),
           ...(streamingUpload ? {
             ...(request.headers.has('X-File-Message') ? { 'X-File-Message': request.headers.get('X-File-Message') } : {}),
-            ...(request.headers.get('X-Optimize-Video') === 'true' ? { 'X-Optimize-Video': 'true' } : {}),
             'X-File-Name': request.headers.get('X-File-Name') || '',
             'X-File-Size': request.headers.get('X-File-Size') || '',
             'X-Upload-Id': request.headers.get('X-Upload-Id') || '',

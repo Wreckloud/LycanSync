@@ -31,7 +31,7 @@ function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localS
     videoPreviewStatus, fetchCompatibleVideo, setTimeout, clearTimeout, Date,
     fetchAttachment, fetchFilePreview, downloadFile: vi.fn(), AbortController, Error, DOMException,
     URL: { createObjectURL, revokeObjectURL },
-  })) as { load(): Promise<void>; close(): void; convertVideo(): Promise<void>; videoPlayable(): void; playbackFailed(code?: number): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
+  })) as { load(): Promise<void>; close(): void; convertVideo(start: boolean): Promise<void>; videoPlayable(): void; playbackFailed(code?: number): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
   return { scope, viewer, pending, createObjectURL, revokeObjectURL, fetchAttachment, fetchFilePreview, videoPreviewStatus, fetchCompatibleVideo, emit };
 }
 
@@ -166,14 +166,17 @@ it('待发送预览复用附件来源，失败不请求服务器，关闭不撤�
   }
 });
 
-it('正常播放不转换，网络中断也不触发转码，解码失败自动准备兼容文件', async () => {
+it('正常播放不转换，网络中断也不触发转码，解码失败先查询，用户操作才启动转码', async () => {
   const f = setup(false, true);
   await f.viewer.load();
   expect(f.videoPreviewStatus).not.toHaveBeenCalled();
   f.viewer.playbackFailed(2);
   expect(f.videoPreviewStatus).not.toHaveBeenCalled();
-  f.viewer.playbackFailed();
+  f.videoPreviewStatus.mockResolvedValueOnce({ status: 'absent' });
+  f.viewer.playbackFailed(3);
   await new Promise(resolve => setTimeout(resolve, 0));
+  expect(f.videoPreviewStatus).toHaveBeenCalledExactlyOnceWith('group', 'file', false, expect.any(AbortSignal));
+  await f.viewer.convertVideo(true);
   expect(f.videoPreviewStatus).toHaveBeenCalledWith('group', 'file', true, expect.any(AbortSignal));
   expect(f.viewer.source.value).toBe('/api/groups/group/files/file/preview/media');
   expect(f.viewer.compatible.value).toBe(true);
@@ -186,16 +189,30 @@ it('播放失败后自动复用已有兼容预览，不重新启动转换', asyn
   await f.viewer.load();
   f.viewer.playbackFailed();
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(f.videoPreviewStatus).toHaveBeenCalledExactlyOnceWith('group', 'file', true, expect.any(AbortSignal));
+  expect(f.videoPreviewStatus).toHaveBeenCalledExactlyOnceWith('group', 'file', false, expect.any(AbortSignal));
   expect(f.viewer.source.value).toBe('/api/groups/group/files/file/preview/media');
   f.scope.stop();
+});
+
+it('另一位观看者已发起转换时只查状态，重复点击不会再提交', async () => {
+  vi.useFakeTimers();
+  const f = setup(false, true);
+  try {
+    f.videoPreviewStatus.mockResolvedValueOnce({ status: 'processing' });
+    const watching = f.viewer.convertVideo(false);
+    await vi.advanceTimersByTimeAsync(10);
+    await f.viewer.convertVideo(true);
+    await vi.advanceTimersByTimeAsync(1000); await watching;
+    expect(f.videoPreviewStatus.mock.calls.map(call => call[2])).toEqual([false, false]);
+    expect(f.viewer.compatible.value).toBe(true);
+  } finally { f.scope.stop(); vi.useRealTimers(); }
 });
 
 it('关闭查看器取消转换等待，迟到结果不替换画面', async () => {
   const f = setup(false, true);
   let resolve!: (value: unknown) => void;
   f.videoPreviewStatus.mockReturnValueOnce(new Promise(done => { resolve = done; }));
-  const conversion = f.viewer.convertVideo();
+  const conversion = f.viewer.convertVideo(true);
   f.viewer.close();
   expect(f.videoPreviewStatus.mock.calls[0][3].aborted).toBe(true);
   resolve({ status: 'ready' }); await conversion;
@@ -209,13 +226,13 @@ it('转换未完成只轮询状态，失败可重试，不伪造成功', async (
   const f = setup(false, true);
   try {
     f.videoPreviewStatus.mockResolvedValueOnce({ status: 'processing' }).mockResolvedValueOnce({ status: 'failed', message: '无法转换' });
-    const conversion = f.viewer.convertVideo();
+    const conversion = f.viewer.convertVideo(true);
     await vi.advanceTimersByTimeAsync(1000); await conversion;
     expect(f.videoPreviewStatus.mock.calls.map(call => call[2])).toEqual([true, false]);
-    expect(f.viewer.error.value).toBe('暂时无法播放，可重试或下载后打开。');
+    expect(f.viewer.error.value).toBe('无法转换');
     expect(f.viewer.converting.value).toBe(false);
     expect(f.viewer.compatible.value).toBe(false);
-    await f.viewer.convertVideo();
+    await f.viewer.convertVideo(true);
     expect(f.viewer.compatible.value).toBe(true);
   } finally { f.scope.stop(); vi.useRealTimers(); }
 });

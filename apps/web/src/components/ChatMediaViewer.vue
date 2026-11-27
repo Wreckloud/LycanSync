@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Download, Music2, X } from '@lucide/vue';
+import { Download, Film, Music2, X } from '@lucide/vue';
 import { desktopMediaUrl, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
@@ -23,10 +23,9 @@ const transfers = inject(CHAT_TRANSFERS)!;
 const cache = inject(ACCOUNT_CACHE, null);
 const downloadTask = computed(() => transfers.downloads.get(props.attachment.id));
 const downloading = computed(() => Boolean(downloadTask.value?.controller));
-const converting = ref(false);
-const compatible = ref(false);
-const conversionStatus = ref('');
-const conversionHint = useLoadingHint(() => converting.value);
+const conversion = ref<'idle' | 'checking' | 'offered' | 'starting' | 'processing' | 'loading' | 'ready' | 'failed'>('idle');
+const converting = computed(() => ['checking', 'starting', 'processing', 'loading'].includes(conversion.value));
+const compatible = computed(() => conversion.value === 'ready');
 const dialog = ref<HTMLElement | null>(null);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const player = ref<HTMLMediaElement | null>(null);
@@ -111,7 +110,7 @@ async function load(refresh = false) {
   if (disposed) return;
   request?.abort();
   conversionRequest?.abort();
-  compatible.value = false;
+  conversion.value = 'idle';
   const current = request = new AbortController();
   const retrying = previewFailed.value && Boolean(source.value);
   release();
@@ -161,17 +160,18 @@ function videoPlayable() {
   emit('ready');
 }
 
-async function convertVideo() {
+async function convertVideo(start: boolean) {
   if (converting.value || disposed) return;
   const current = conversionRequest = new AbortController();
-  converting.value = true;
-  conversionStatus.value = '正在准备播放…';
+  conversion.value = start ? 'starting' : 'checking';
   error.value = '';
   try {
-    let status = await videoPreviewStatus(props.groupId, props.attachment.id, true, current.signal);
+    let status = await videoPreviewStatus(props.groupId, props.attachment.id, start, current.signal);
     if (disposed || current.signal.aborted || conversionRequest !== current) return;
+    if (status.status === 'absent') { conversion.value = 'offered'; return; }
     const deadline = Date.now() + 330_000;
     while (status.status === 'processing') {
+      conversion.value = 'processing';
       if (Date.now() > deadline) throw new Error('视频仍在转换，请稍后重新打开。');
       await new Promise<void>((resolve, reject) => {
         const cancel = () => { clearTimeout(timer); reject(current.signal.reason); };
@@ -182,19 +182,22 @@ async function convertVideo() {
       status = await videoPreviewStatus(props.groupId, props.attachment.id, false, current.signal);
       if (disposed || current.signal.aborted || conversionRequest !== current) return;
     }
-    if (status.status !== 'ready') throw new Error(status.message || '兼容预览已清理，请重新转换。');
-    conversionStatus.value = '正在加载视频…';
+    if (status.status !== 'ready') {
+      conversion.value = 'failed';
+      throw new Error(status.message || (status.status === 'failed' ? '视频转码失败，可重试或下载原文件。' : '兼容预览已清理，请重新转换。'));
+    }
+    conversion.value = 'loading';
     const url = desktopMediaUrl(props.groupId, props.attachment.id, true);
     const blob = url ? null : await fetchCompatibleVideo(props.groupId, props.attachment.id, current.signal);
     if (disposed || current.signal.aborted || conversionRequest !== current) return;
     release();
-    compatible.value = true;
+    conversion.value = 'ready';
     previewFailed.value = false;
     source.value = url || URL.createObjectURL(blob!);
-  } catch {
-    if (!disposed && !current.signal.aborted) error.value = '暂时无法播放，可重试或下载后打开。';
-  } finally {
-    if (conversionRequest === current) converting.value = false;
+  } catch (reason) {
+    if (disposed || current.signal.aborted || conversionRequest !== current) return;
+    conversion.value = conversion.value === 'checking' ? 'idle' : 'failed';
+    error.value = reason instanceof Error ? reason.message : '兼容预览暂时不可用，请重试或下载原文件。';
   }
 }
 
@@ -227,8 +230,8 @@ function playbackFailed(code?: number | Event) {
     emit('ready');
     previewFailed.value = true;
     if (props.localSource) { error.value = '此文件暂时无法在应用中预览，仍可作为附件发送。'; return; }
-    if (code === 2) { error.value = '视频加载中断，请重试。'; return; }
-    if (format.value?.kind === 'video' && !compatible.value) { void convertVideo(); return; }
+    if (code === 1 || code === 2) { error.value = '视频加载中断，请重试。'; return; }
+    if (format.value?.kind === 'video' && !compatible.value) { void convertVideo(false); return; }
     error.value = '这个文件暂时无法预览，可以下载后打开。';
   }
 }
@@ -256,7 +259,24 @@ onScopeDispose(() => {
           :original-label="thumbnail ? '查看原图 · ' + formatAttachmentSize(attachment.byteSize) : undefined" :original="original"
           :percent="originalPercent" :original-error="originalError" @original-request="loadOriginal()" @close="close" @download="download" @error="playbackFailed" />
         <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading"
-          :buffer-for-preview="inlineLoading" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="videoPlayable" @close="close" @download="download" @error="playbackFailed" />
+          :buffer-for-preview="inlineLoading" :autoplay="compatible" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="videoPlayable" @close="close" @download="download" @error="playbackFailed">
+          <template #unplayable>
+            <div v-if="conversion !== 'idle' && !compatible" class="video-conversion" role="status">
+              <Film :size="32" aria-hidden="true" />
+              <strong>{{ title }}</strong>
+              <span v-if="conversion === 'offered'">当前设备无法播放此视频，可转码播放或下载原文件。</span>
+              <span v-else-if="conversion === 'processing'">正在生成兼容版…</span>
+              <span v-else-if="conversion === 'starting'">正在请求转码…</span>
+              <span v-else-if="conversion === 'checking'">正在检查兼容版…</span>
+              <span v-else-if="conversion === 'loading'">正在加载兼容版…</span>
+            </div>
+          </template>
+          <template #tools>
+            <span v-if="compatible" class="compatible-label">兼容预览</span>
+            <button v-if="['offered', 'failed', 'starting', 'processing'].includes(conversion)" class="convert-action" type="button"
+              :disabled="converting" @click="convertVideo(true)">{{ conversion === 'failed' ? '重试转码' : '转码播放' }}</button>
+          </template>
+        </MediaVideoSurface>
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
           <audio ref="player" :src="source" controls preload="metadata" tabindex="0" @error="playbackFailed" />
@@ -266,10 +286,9 @@ onScopeDispose(() => {
       <div v-if="!localSource && (format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image'))" class="media-fallback-tools">
         <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button>
       </div>
-      <footer v-if="error || downloadTask?.error || conversionHint" class="chat-media-feedback">
-        <span v-if="error || downloadTask?.error" role="alert">{{ error || downloadTask?.error }}</span>
-        <span v-else-if="conversionHint" class="conversion-status" role="status">{{ conversionStatus }}</span>
-        <button v-if="error && !localSource && !converting" type="button" @click="load(true)">重试</button>
+      <footer v-if="error || downloadTask?.error" class="chat-media-feedback">
+        <span role="alert">{{ error || downloadTask?.error }}</span>
+        <button v-if="error && !localSource && !converting" type="button" @click="load(true)">{{ conversion === 'failed' ? '重试原片' : '重试' }}</button>
       </footer>
     </section>
   </div>
@@ -290,6 +309,9 @@ onScopeDispose(() => {
 .media-fallback-tools { display: flex; justify-content: center; padding: 12px; }
 .media-fallback-tools button { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; }
 .chat-media-feedback { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--danger); font-size: 13px; }
-.conversion-status { color: var(--muted); }
+.video-conversion { display: grid; justify-items: center; gap: 10px; text-align: center; color: var(--muted); }
+.video-conversion strong { color: var(--text); font-size: 16px; overflow-wrap: anywhere; }
+.media-viewer-tools .convert-action, .compatible-label { width: auto; padding: 0 14px; white-space: nowrap; }
+.compatible-label { display: grid; place-items: center; background: #171c22cc; color: var(--muted); font-size: 13px; }
 .chat-media-feedback button { flex-shrink: 0; }
 </style>

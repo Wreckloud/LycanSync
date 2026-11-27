@@ -1209,7 +1209,7 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
         return route.fulfill({ contentType: 'video/webm', body: video });
       }
       if (url.pathname.endsWith('/files') && request.method() === 'POST') {
-        expect(request.headers()['x-optimize-video']).toBe('true');
+        expect(request.headers()['x-optimize-video']).toBeUndefined();
         await gate;
         delete messages[0].attachment!.transferStatus;
         return route.fulfill({ json: messages[0] });
@@ -1226,6 +1226,8 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
   try {
     await page.locator('input[type=file]').setInputFiles({ name: '录像.webm', mimeType: 'video/webm', buffer: video });
     await expect(page.locator('.composer-attachment canvas')).toBeVisible();
+    await expect(page.locator('.composer-attachment').getByLabel('发送原文件')).toHaveCount(0);
+    await page.locator('.composer').screenshot({ path: test.info().outputPath('video-send.png') });
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(peer.getByText('文件上传中…')).toBeVisible();
     await expect(peer.locator('.chat-inline-media img')).toBeVisible();
@@ -1234,8 +1236,8 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await expect(page.getByRole('button', { name: '取消发送' })).toBeVisible();
     await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', '50');
     await page.evaluate(() => window.dispatchEvent(new Event('resume-test-upload')));
-    await expect(page.getByText('等待服务器确认…')).toBeVisible();
-    await expect(page.getByRole('progressbar', { name: '等待服务器确认…' })).not.toHaveAttribute('value');
+    await expect(page.getByText('正在完成发送…')).toBeVisible();
+    await expect(page.getByRole('progressbar', { name: '正在完成发送…' })).not.toHaveAttribute('value');
     const pending = peer.locator('.chat-transfer-media');
     await expect(pending.getByRole('button')).toHaveCount(0);
     for (const client of [page, peer]) {
@@ -1309,7 +1311,7 @@ test('旧视频缓存无法播放且兼容转换失败时，重试取回可播�
   const clip = readFileSync(new URL('./fixtures/chat-clip.webm', import.meta.url));
   const message = fileMessage('clip-message', 'clip', '短片.webm');
   message.attachment!.byteSize = clip.length;
-  let downloads = 0, conversions = 0;
+  let downloads = 0, conversions = 0, finish = false;
   await page.route('**/api/groups**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
@@ -1317,8 +1319,8 @@ test('旧视频缓存无法播放且兼容转换失败时，重试取回可播�
     if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : [message], hasMore: false } });
     if (url.pathname.endsWith('/thumbnail')) return route.fulfill({ status: 204 });
     if (url.pathname.endsWith('/preview')) {
-      conversions++;
-      return route.fulfill({ json: { status: 'failed' } });
+      if (route.request().method() === 'POST') conversions++;
+      return route.fulfill({ json: { status: conversions === 0 ? 'absent' : finish ? 'failed' : 'processing', message: finish ? '视频转换未能完成。' : null } });
     }
     if (url.pathname.endsWith('/files/clip')) {
       downloads++;
@@ -1337,8 +1339,19 @@ test('旧视频缓存无法播放且兼容转换失败时，重试取回可播�
     await cache.write('video', groupId, new Blob([new Uint8Array(size)]), 'clip');
     cache.dispose();
   }, { groupId, userId: user.id, size: clip.length });
+  await page.setViewportSize({ width: 960, height: 600 });
   await open.click();
-  const retry = page.getByRole('dialog', { name: '短片.webm' }).getByRole('button', { name: '重试', exact: true });
+  const viewer = page.getByRole('dialog', { name: '短片.webm' });
+  const convert = viewer.getByRole('button', { name: '转码播放' });
+  await expect(convert).toBeVisible();
+  expect(conversions).toBe(0);
+  await viewer.screenshot({ path: test.info().outputPath('video-offer.png') });
+  await convert.click();
+  await expect(viewer.getByText('正在生成兼容版…')).toBeVisible();
+  await viewer.screenshot({ path: test.info().outputPath('video-processing.png') });
+  finish = true;
+  await expect(viewer.getByRole('button', { name: '重试转码' })).toBeVisible();
+  const retry = viewer.getByRole('button', { name: '重试原片', exact: true });
   await expect(retry).toBeVisible();
   expect(downloads).toBe(0);
   await retry.click();
