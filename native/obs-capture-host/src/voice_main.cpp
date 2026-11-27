@@ -176,19 +176,20 @@ struct AudioPipe {
       OVERLAPPED operation{}; operation.hEvent = completed;
       ResetEvent(completed);
       DWORD written = 0;
-      if (!WriteFile(pipe, &packet, sizeof(packet), &written, &operation)) {
+      if (!WriteFile(pipe, &packet, sizeof(packet), nullptr, &operation)) {
         const auto error = GetLastError();
         if (error != ERROR_IO_PENDING) { fail("write", error); break; }
-      }
-      const HANDLE signals[] = {stop, completed};
-      const auto ready = WaitForMultipleObjects(2, signals, FALSE, 1000);
-      if (ready != WAIT_OBJECT_0 + 1) {
-        const auto error = ready == WAIT_FAILED ? GetLastError() : ready;
-        // 取消之后仍等待本次 I/O 完成，不能提前释放栈上的 packet 和 OVERLAPPED。
-        CancelIoEx(pipe, &operation);
-        GetOverlappedResult(pipe, &operation, &written, TRUE);
-        if (ready != WAIT_OBJECT_0) fail("writeWait", error);
-        break;
+        // 已开始通话时允许读取端短暂停顿。保留同一笔写入，采集队列继续淘汰旧块，停止事件随时可唤醒。
+        const HANDLE signals[] = {stop, completed};
+        const auto ready = WaitForMultipleObjects(2, signals, FALSE, delivered ? 3000 : 1000);
+        if (ready != WAIT_OBJECT_0 + 1) {
+          const auto wait_error = ready == WAIT_FAILED ? GetLastError() : ready;
+          CancelIoEx(pipe, &operation);
+          // 完成或取消后才能释放本次 I/O 引用的栈内存。
+          GetOverlappedResult(pipe, &operation, &written, TRUE);
+          if (ready != WAIT_OBJECT_0) fail("writeWait", wait_error);
+          break;
+        }
       }
       if (!GetOverlappedResult(pipe, &operation, &written, FALSE)) { fail("writeResult", GetLastError()); break; }
       if (written != sizeof(packet)) { fail("shortWrite", ERROR_WRITE_FAULT); break; }

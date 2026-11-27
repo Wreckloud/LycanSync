@@ -1,0 +1,72 @@
+#include "voice_transmission.h"
+#include <windows.h>
+#include <array>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <string>
+#include <thread>
+
+using Clock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+struct obs_source_t {};
+struct audio_data { const uint8_t *data[1]; uint32_t frames; };
+@VOICE_PIPE@
+
+void require(bool passed, const char *reason) {
+  if (!passed) { std::fprintf(stderr, "%s\n", reason); std::exit(1); }
+}
+
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  const std::string scenario = argv[1];
+  const auto name = L"\\\\.\\pipe\\lycansync-test-voice-" + std::to_wstring(GetCurrentProcessId());
+  const auto reader = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+      PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+  require(reader != INVALID_HANDLE_VALUE, "create reader");
+  AudioPipe pipe;
+  pipe.writer = std::thread([&] { pipe.run(name); });
+  require(ConnectNamedPipe(reader, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "connect");
+  std::jthread producer([&](std::stop_token stop) {
+    std::array<float, 480> samples{};
+    audio_data block{{reinterpret_cast<const uint8_t *>(samples.data())}, 480};
+    for (int sequence = 1; !stop.stop_requested(); ++sequence) {
+      samples.fill(static_cast<float>(sequence));
+      AudioPipe::capture(&pipe, nullptr, &block, false);
+      std::this_thread::sleep_for(10ms);
+    }
+  });
+  Packet packet;
+  auto read_packet = [&] {
+    DWORD bytes = 0;
+    return ReadFile(reader, &packet, sizeof(packet), &bytes, nullptr) && bytes == sizeof(packet)
+        && packet.frames == 480 && packet.samples.front() == packet.samples.back();
+  };
+  require(read_packet(), "first packet");
+  std::this_thread::sleep_for(scenario == "timeout" ? 3800ms : 1600ms);
+  const auto before_stop = Clock::now();
+  if (scenario == "resume") {
+    float previous = packet.samples[0];
+    for (int read = 0; read < 20; ++read) {
+      if (!read_packet()) break;
+      require(packet.samples[0] > previous, "duplicate or out of order");
+      previous = packet.samples[0];
+    }
+    require(pipe.delivered && !pipe.failed && previous > 20, "temporary stall terminated capture");
+  } else if (scenario == "disconnect") {
+    DisconnectNamedPipe(reader);
+    for (int i = 0; i < 100 && !pipe.failed; ++i) std::this_thread::sleep_for(10ms);
+    require(pipe.failed && pipe.failure_error != WAIT_TIMEOUT, "broken pipe was not reported");
+  } else if (scenario == "timeout") {
+    require(pipe.failed && std::string(pipe.failure_phase) == "writeWait" && pipe.failure_error == WAIT_TIMEOUT,
+        "persistent stall was not reported");
+  } else require(scenario == "stop" && !pipe.failed, "capture failed before stop");
+  producer.request_stop();
+  pipe.shutdown();
+  producer.join();
+  CloseHandle(reader);
+  const auto cleanup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - before_stop).count();
+  if (scenario == "stop") require(!pipe.failed && cleanup_ms < 750, "stop did not cancel pending write promptly");
+  std::printf("%s hostDropped=%llu phase=%s error=%lu\n", scenario.c_str(), pipe.dropped, pipe.failure_phase, pipe.failure_error);
+}
