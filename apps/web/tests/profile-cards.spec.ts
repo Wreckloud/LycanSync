@@ -735,6 +735,7 @@ test('从原录像封面跟踪、取消和完成剪辑，关闭列表或浏览�
   expect(await scrollTop()).toBe(before);
   await progress(42);
   await expect(row.getByText('导出中 42%')).toBeInViewport();
+  await expect(row.locator('.recording-thumbnail > svg')).toHaveCount(0);
   await expect(row.getByRole('button', { name: '删除录像' })).toBeDisabled();
   await manager.getByRole('button', { name: '关闭', exact: true }).click();
   await progress(75);

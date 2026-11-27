@@ -1238,11 +1238,16 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await expect(page.getByRole('progressbar', { name: '等待服务器确认…' })).not.toHaveAttribute('value');
     const pending = peer.locator('.chat-transfer-media');
     await expect(pending.getByRole('button')).toHaveCount(0);
-    const cover = await pending.locator('.chat-inline-media').boundingBox();
-    const status = await pending.locator('.chat-media-transfer-footer').boundingBox();
-    expect(status!.x).toBeGreaterThanOrEqual(cover!.x);
-    expect(status!.y).toBeGreaterThan(cover!.y);
-    expect(Math.abs(cover!.y + cover!.height - status!.y - status!.height - 5)).toBeLessThanOrEqual(1);
+    for (const client of [page, peer]) {
+      const frame = client.locator('.chat-transfer-media .chat-inline-media');
+      const footer = await frame.locator('.chat-media-transfer-footer').boundingBox();
+      const track = await frame.locator('.chat-media-progress').boundingBox();
+      const bounds = await frame.boundingBox();
+      expect(footer!.x).toBeGreaterThanOrEqual(bounds!.x);
+      expect(footer!.y).toBeGreaterThan(bounds!.y);
+      expect(Math.abs(footer!.y + footer!.height - track!.y)).toBeLessThan(0.1);
+      expect(Math.abs(track!.y + track!.height - bounds!.y - bounds!.height)).toBeLessThan(0.1);
+    }
     for (const content of ['后发文字 1', '后发文字 2']) {
       await page.getByLabel('消息内容').fill(content);
       await page.getByLabel('消息内容').press('Enter');

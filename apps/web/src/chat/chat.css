@@ -195,7 +195,9 @@ button.chat-file-summary { cursor: pointer; }
 .composer-original input { margin: 0; accent-color: var(--accent); }
 .composer-attachment-name { min-width: 0; flex: 1; }
 .chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; color: var(--subtle); font-size: 12px; }
-.chat-media-transfer-footer { position: absolute; inset: auto 0 5px; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 6px; background: linear-gradient(transparent, #10161deb); color: white; pointer-events: none; }
+.chat-transfer-media .chat-inline-media { display: flex; flex-direction: column; justify-content: flex-end; }
+.chat-transfer-media .chat-inline-media > :is(img, .recording-thumbnail) { position: absolute; inset: 0; }
+.chat-media-transfer-footer { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 6px; background: var(--media-toolbar-tint); color: white; pointer-events: none; }
 .chat-media-transfer-footer small { font-size: 11px; text-shadow: 0 1px 2px #000; }
 .chat-media-transfer-footer button { display: grid; place-items: center; flex: 0 0 28px; height: 28px; padding: 0; border: 0; background: transparent; color: white; cursor: pointer; pointer-events: auto; }
 .chat-media-transfer-footer button svg { filter: drop-shadow(0 1px 2px #000); }
@@ -212,7 +214,8 @@ button.chat-file-summary { cursor: pointer; }
 .chat-inline-image > .chat-media-placeholder + .chat-media-play:last-child, .chat-image-download { inset: auto 10px 10px auto; transform: none; width: 36px; height: 36px; }
 .chat-image-frame .chat-image-open .chat-image-temporary { width: auto; height: auto; padding: 4px 8px; border-radius: 4px; }
 
-.chat-media-progress { position: absolute; inset: auto 0 0; display: block; width: 100%; pointer-events: none; }
+.chat-media-progress { position: absolute; inset: auto 0 0; border-radius: 0; pointer-events: none; }
+.chat-transfer-media .chat-media-progress { position: relative; order: 1; flex: none; }
 .chat-file-media .chat-inline-media > .recording-thumbnail { width: 100%; height: 100%; border: 0; }
 .chat-inline-media > .recording-thumbnail canvas { width: 100%; height: 100%; object-fit: contain; }
 .chat-inline-media > img { width: 100%; height: 100%; object-fit: contain; }
