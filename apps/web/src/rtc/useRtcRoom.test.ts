@@ -1083,6 +1083,28 @@ describe('room media lifecycle', () => {
     } finally { await rtc.leave(); scope.stop(); log.mockRestore(); }
   });
 
+  it('入房开麦期间管道关闭只结束本次采集，手动开麦才重新启动', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    const start = deferred<void>();
+    rtcMocks.microphoneStarted.mockReturnValueOnce(start.promise);
+    try {
+      const joining = rtc.join('pending-microphone-error');
+      await vi.waitFor(() => expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce());
+      rtcMocks.nativeMicrophoneError('microphoneCapturePipeClosed');
+      start.reject(new Error('microphoneCaptureStartTimedOut'));
+      expect(await joining).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtc.status.value).toBe('connected');
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.notice.value).toContain('麦克风已停止');
+      await rtc.toggleMedia(Track.Source.Microphone);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2);
+      expect(rtc.microphoneEnabled.value).toBe(true);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
   it('恢复启动失败保留意愿，但不能显示成功开麦；明确开麦可重试', async () => {
     configureNativeMicrophoneDesktop();
     const scope = effectScope();

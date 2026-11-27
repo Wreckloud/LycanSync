@@ -888,8 +888,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const operations = pendingMedia.value;
     operations.add(source);
     const version = microphoneVersion;
+    let nativeInterrupted = false;
     const isCurrentTask = () => activeRoom.value === currentRoom && pendingMedia.value === operations
-      && (!enabled || version === microphoneVersion);
+      && (!enabled || (!nativeInterrupted && version === microphoneVersion));
     const microphoneProcessorAtStart = microphoneProcessor;
     busySources.value = [...operations];
     notice.value = '';
@@ -948,7 +949,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           pushToTalk: microphonePushToTalk,
           onError: (code) => {
             if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
-            microphoneVersion++;
+            // 采集中断只作废这次任务；改变用户意愿版本会让同步循环再次启动同一个设备。
+            nativeInterrupted = true;
             forbidMicrophone();
             // 原生中断同样走房间的关麦清理，不留下另一条吞错的取消发布路径。
             void applyMicrophoneEnabled(false);
