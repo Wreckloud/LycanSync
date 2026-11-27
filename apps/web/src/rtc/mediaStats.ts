@@ -4,6 +4,8 @@ export interface VideoLayerStats {
   active: boolean | null;
   size: string;
   frameCount: number | null;
+  framesReceived?: number | null;
+  jitterBufferEmittedCount?: number | null;
   fps: number | null;
   intervalMs: number | null;
   bitrateKbps: number | null;
@@ -179,6 +181,10 @@ export function readVideoLayers(
       active,
       size: stat.frameWidth && stat.frameHeight ? `${stat.frameWidth}×${stat.frameHeight}` : '未知',
       frameCount: typeof frames === 'number' ? frames : null,
+      ...(direction === 'inbound-rtp' && {
+        framesReceived: Number.isSafeInteger(stat.framesReceived) && stat.framesReceived >= 0 ? stat.framesReceived : null,
+        jitterBufferEmittedCount: jitterBufferEmittedCount !== null && jitterBufferEmittedCount >= 0 ? jitterBufferEmittedCount : null,
+      }),
       fps,
       intervalMs: hasComparableFrames ? Math.round(elapsedSeconds * 1000) : null,
       bitrateKbps,

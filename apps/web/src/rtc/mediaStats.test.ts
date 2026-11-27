@@ -125,6 +125,15 @@ describe('屏幕共享媒体统计', () => {
       .toMatchObject({ receiveLossPercent: null, jitterBufferMs: null });
   });
 
+  it('接收端分别记录完整帧、缓冲释放帧和解码帧，保留零与缺失的区别', () => {
+    const inbound = (extra: Record<string, unknown>) => readVideoLayers(report([
+      { id: 'in', type: 'inbound-rtp', kind: 'video', timestamp: 1000, framesDecoded: 4, ...extra },
+    ]), 'inbound-rtp', new Map(), 'track')[0];
+    expect(inbound({ framesReceived: 25, jitterBufferEmittedCount: 8 })).toMatchObject({
+      framesReceived: 25, jitterBufferEmittedCount: 8, frameCount: 4 });
+    expect(inbound({ framesReceived: 0 })).toMatchObject({ framesReceived: 0, jitterBufferEmittedCount: null });
+  });
+
   it('按RID匹配真实编码层开关，不把缺失状态或接收轨道伪造成启用', () => {
     const stats = report([
       { id: 'high', rid: 'h', type: 'outbound-rtp', kind: 'video', frameWidth: 1920, frameHeight: 1080 },

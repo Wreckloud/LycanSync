@@ -300,6 +300,8 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       layers: stream.layers.map((layer, index) => ({ layer: index + 1, rid: layer.rid ?? null, size: layer.size, codec: label(layer.codec),
         active: layer.active,
         frameCount: numeric(layer.frameCount), fps: numeric(layer.fps), intervalMs: numeric(layer.intervalMs),
+        ...(stream.direction === '接收' && { framesReceived: numeric(layer.framesReceived),
+          jitterBufferEmittedCount: numeric(layer.jitterBufferEmittedCount) }),
         bitrateKbps: numeric(layer.bitrateKbps), encoder: label(layer.encoder),
         decoder: label(layer.decoder), averageDecodeMs: numeric(layer.averageDecodeMs),
         powerEfficientDecoder: typeof layer.powerEfficientDecoder === 'boolean' ? layer.powerEfficientDecoder : null,
@@ -506,8 +508,11 @@ export function useDiagnosticReport(options: {
               [exported.native?.framesReceived ?? null, samples.at(-1)?.native?.framesReceived ?? null],
               [exported.native?.framesProcessed ?? null, samples.at(-1)?.native?.framesProcessed ?? null],
             ] : []),
-            ...stream.layers.map((layer) => [layer.frameCount,
-              previousStream.layers.find((item) => reportLayerKey(item) === reportLayerKey(layer))?.frameCount ?? null]),
+            ...stream.layers.flatMap((layer) => {
+              const prior = previousStream.layers.find((item) => reportLayerKey(item) === reportLayerKey(layer));
+              return [[layer.frameCount, prior?.frameCount], [layer.framesReceived, prior?.framesReceived],
+                [layer.jitterBufferEmittedCount, prior?.jitterBufferEmittedCount]];
+            }),
           ].some(([current, prior]) => typeof current === 'number' && typeof prior === 'number' && current < prior);
           let segmentReason = previousSegment ? 'continuation' : 'initial';
           if (previousSegment) {

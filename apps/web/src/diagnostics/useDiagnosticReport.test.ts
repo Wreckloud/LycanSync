@@ -650,6 +650,21 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(result.samples[0].streams[0].member).toBe('member-1');
 });
 
+it('导出接收链的累计帧数，完整帧计数回退时重新分段', async () => {
+  const first = snapshot();
+  first.streams[0].direction = '接收';
+  Object.assign(first.streams[0].layers[0], { framesReceived: 210, jitterBufferEmittedCount: 190 });
+  const next = structuredClone(first);
+  next.streams[0].layers[0].framesReceived = 0;
+  collect.mockResolvedValueOnce(first).mockResolvedValueOnce(next);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000);
+  await report.stop(); await report.save('');
+  const { samples } = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(samples[0].streams[0].layers[0]).toMatchObject({ framesReceived: 210, jitterBufferEmittedCount: 190, frameCount: 180 });
+  expect(samples[1].streams[0]).toMatchObject({ segmentReason: 'counter-reset', layers: [{ framesReceived: 0, fps: null }] });
+});
+
 it('累计帧计数重置后另起匿名分段，不把前后区间合并', async () => {
   const first = snapshot();
   const reset = snapshot();
