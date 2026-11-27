@@ -114,13 +114,13 @@ watchEffect(onCleanup => {
 </script>
 
 <template>
-  <div v-if="(track && context) || showBaseline" ref="surface" class="spectrum" :class="{ 'has-baseline': showBaseline }" aria-hidden="true"><i v-for="i in bands.length" :key="i" /></div>
+  <div v-if="(track && context) || showBaseline" ref="surface" class="spectrum" :class="{ 'has-baseline': showBaseline, 'peaks-only': !track }" aria-hidden="true"><i v-for="i in bands.length" :key="i" /></div>
 </template>
 
 <style scoped>
 .spectrum { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 :global(.participant-media:has(.spectrum) .large-avatar) { z-index: 1; }
-.spectrum.has-baseline { --spectrum-baseline: 4px; }
-.spectrum i { position: relative; height: calc(var(--spectrum-baseline, 0px) + var(--level, 0px)); background: var(--muted); }
-.spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--spectrum-baseline, 0px) + var(--peak, 0px) - 2px); height: min(2px, var(--peak, 0px)); background: var(--text); }
+.spectrum i { position: relative; height: var(--level, 0px); background: var(--muted); }
+.spectrum.peaks-only i { height: 0; }
+.spectrum.has-baseline i::after { content: ''; position: absolute; inset-inline: 0; bottom: max(0px, calc(var(--peak, 0px) - 2px)); height: 2px; background: var(--text); }
 </style>

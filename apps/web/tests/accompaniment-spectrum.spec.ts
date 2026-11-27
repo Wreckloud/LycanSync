@@ -68,7 +68,10 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   }, level);
   const levels = () => spectrum.locator('i').evaluateAll(bars => ({
     height: Math.max(0, ...bars.map(bar => bar.clientHeight)),
-    peak: Math.max(0, ...bars.map(bar => parseFloat(getComputedStyle(bar, '::after').bottom) + 2)),
+    peak: Math.max(0, ...bars.map(bar => {
+      const cap = getComputedStyle(bar, '::after');
+      return cap.content === 'none' ? 0 : parseFloat(cap.bottom) + 2;
+    })),
   }));
   await start.click();
   await expect.poll(async () => (await levels()).height).toBeGreaterThan(45);
@@ -89,6 +92,7 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   console.log('同一合成音降低 20 dB 前后的最高柱（px）', normalHeight, quietHeight);
   await volume(0);
   await expect.poll(async () => (await levels()).peak).toBe(0);
+  await expect(floorSpectrum).not.toHaveClass(/has-baseline/);
   await expect(spectrum).toBeVisible();
   expect(await levels()).toEqual({ height: 0, peak: 0 });
   await volume(1);
@@ -105,6 +109,7 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   expect(stopped.some(band => band.bottom > 30)).toBe(true);
   expect(await page.evaluate(() => (window as Window & { previewAudioTrack?: MediaStreamTrack }).previewAudioTrack?.readyState)).toBe('ended');
   await page.clock.runFor(160);
+  await floorSpectrum.locator('..').screenshot({ path: test.info().outputPath('production-peaks.png') });
   await section.locator('.listening-cards').screenshot({ path: test.info().outputPath('stop-comparison.png') });
   const settling = await levels();
   expect(settling.peak).toBeGreaterThan(settling.height);

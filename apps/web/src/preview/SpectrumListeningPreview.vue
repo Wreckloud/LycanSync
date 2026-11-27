@@ -106,10 +106,9 @@ async function listenToFile(event: Event) {
       <article v-for="floorPeaks in [false, true]" :key="Number(floorPeaks)" class="participant-card">
         <div class="participant-media">
           <img class="large-avatar" :src="avatar" alt="" />
-          <AccompanimentSpectrum :track="track" :context="context"
-            :class="{ 'floor-peaks': floorPeaks, 'peaks-only': floorPeaks && !track }" />
+          <AccompanimentSpectrum :track="track" :context="context" :class="{ 'reference-spectrum': !floorPeaks }" />
         </div>
-        <div class="participant-meta"><strong>{{ floorPeaks ? '峰值贴底版' : '基础版（当前效果）' }}</strong></div>
+        <div class="participant-meta"><strong>{{ floorPeaks ? '峰值贴底版（正式卡片）' : '基础版（对照）' }}</strong></div>
       </article>
     </div>
   </section>
@@ -121,7 +120,6 @@ async function listenToFile(event: Event) {
 .listening-preview p, .listening-preview small { color: var(--muted); }
 .listening-preview audio { width: min(100%, 464px); }
 .listening-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 222px)); gap: 12px; }
-.floor-peaks.has-baseline { --spectrum-baseline: 0px; }
-.floor-peaks.has-baseline :deep(i::after) { bottom: max(0px, calc(var(--peak, 0px) - 2px)); height: 2px; }
-.floor-peaks.peaks-only :deep(i) { height: 0; }
+.spectrum.reference-spectrum.has-baseline :deep(i) { height: calc(4px + var(--level, 0px)); }
+.spectrum.reference-spectrum.has-baseline :deep(i::after) { bottom: calc(2px + var(--peak, 0px)); height: min(2px, var(--peak, 0px)); }
 </style>
