@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, watchEffect } from 'vue';
 
-const props = defineProps<{ track?: MediaStreamTrack; context?: AudioContext | null; responsive: boolean }>();
+const props = defineProps<{ track?: MediaStreamTrack; context?: AudioContext | null }>();
 const surface = ref<HTMLElement>();
 const visible = ref(false);
 const showBaseline = ref(false);
@@ -40,18 +40,16 @@ watchEffect(onCleanup => {
     return;
   }
 
-  const { context, track, responsive } = props;
+  const { context, track } = props;
   const targets = new Uint8Array(bands.length);
   let attack = 0;
   let sample: (() => void) | undefined;
   if (track && context && context.state !== 'closed') {
     const analyser = context.createAnalyser();
-    analyser.fftSize = responsive ? 2048 : 1024;
-    if (responsive) {
-      analyser.minDecibels = -78;
-      analyser.maxDecibels = -2;
-      analyser.smoothingTimeConstant = .4;
-    }
+    analyser.fftSize = 2048;
+    analyser.minDecibels = -78;
+    analyser.maxDecibels = -2;
+    analyser.smoothingTimeConstant = .4;
     const input = context.createMediaStreamSource(new MediaStream([track]));
     input.connect(analyser);
     onCleanup(() => { input.disconnect(); analyser.disconnect(); });
@@ -64,10 +62,9 @@ watchEffect(onCleanup => {
       for (let i = 0; i < targets.length; i++) {
         let level = 0;
         for (let bin = edges[i]; bin < Math.max(edges[i] + 1, edges[i + 1]); bin++) level = Math.max(level, bins[bin] ?? 0);
-        targets[i] = responsive ? level : Math.round(level / 255 * 50);
+        targets[i] = level;
         strongest = Math.max(strongest, level);
       }
-      if (!responsive) return;
       // 各频段共用有限的响度补偿，接近底噪时取消补偿，避免静音段被抬高。
       const rangeDb = analyser.maxDecibels - analyser.minDecibels;
       const peakDb = analyser.minDecibels + strongest / 255 * rangeDb;
@@ -90,9 +87,7 @@ watchEffect(onCleanup => {
     attack = sounding ? Math.min(1, attack + .25) : Math.max(0, attack - .25);
     let remaining = false;
     bands.forEach((band, i) => {
-      const height = responsive
-        ? Math.max(Math.round(targets[i] * attack), Math.round(band.height * .64) - 1)
-        : targets[i] || Math.max(0, band.height - 14);
+      const height = Math.max(Math.round(targets[i] * attack), Math.round(band.height * .64) - 1);
       const previousPeak = band.peak;
       if (height > 0 && height >= band.peak) { band.peak = height; band.hold = 3; }
       else if (band.hold > 0) band.hold--;

@@ -19,7 +19,7 @@ test('伴奏持续有声时，弱谐波能贴底且主音和中等频段仍清�
   });
   await page.goto('/controls-preview.html#accompaniment');
   const section = page.getByRole('region', { name: '本地伴奏频谱试听' });
-  const card = section.locator('article').filter({ hasText: '灵敏版' });
+  const card = section.locator('article').filter({ hasText: '基础版' });
   await section.getByRole('button', { name: '读取正在播放的声音' }).click();
   const bars = card.locator('.spectrum i');
   await expect.poll(() => bars.evaluateAll(items => Math.max(...items.map(item => item.clientHeight)))).toBeGreaterThan(65);
@@ -53,7 +53,13 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   });
   await page.goto('/controls-preview.html#accompaniment');
   const section = page.getByRole('region', { name: '本地伴奏频谱试听' });
-  const card = section.locator('article').filter({ hasText: '灵敏版' });
+  const card = section.locator('article').filter({ hasText: '基础版' });
+  const floorSpectrum = section.locator('article').filter({ hasText: '峰值贴底版' }).locator('.spectrum');
+  const floorState = () => floorSpectrum.locator('i').evaluateAll(bars => bars.map(bar => ({
+    body: bar.clientHeight,
+    bottom: parseFloat(getComputedStyle(bar, '::after').bottom),
+    cap: parseFloat(getComputedStyle(bar, '::after').height),
+  })));
   const spectrum = card.locator('.spectrum');
   const start = section.getByRole('button', { name: '读取正在播放的声音' });
   const stop = section.getByRole('button', { name: '停止试听' });
@@ -89,13 +95,22 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   await expect.poll(async () => (await levels()).height).toBeGreaterThan(45);
 
   await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 250));
+  const beforeStop = await floorState();
+  expect(beforeStop.some(band => band.body > 30)).toBe(true);
+  expect(beforeStop.some(band => band.body === 0 && band.bottom === 0 && band.cap === 2)).toBe(true);
   await stop.evaluate(button => (button as HTMLButtonElement).click());
+  const stopped = await floorState();
+  expect(stopped).toHaveLength(21);
+  expect(stopped.every(band => band.body === 0)).toBe(true);
+  expect(stopped.some(band => band.bottom > 30)).toBe(true);
   expect(await page.evaluate(() => (window as Window & { previewAudioTrack?: MediaStreamTrack }).previewAudioTrack?.readyState)).toBe('ended');
   await page.clock.runFor(160);
+  await section.locator('.listening-cards').screenshot({ path: test.info().outputPath('stop-comparison.png') });
   const settling = await levels();
   expect(settling.peak).toBeGreaterThan(settling.height);
   await card.screenshot({ path: test.info().outputPath('settling.png') });
   await page.clock.runFor(480);
+  expect(Math.max(...(await floorState()).map(band => band.bottom))).toBeLessThan(Math.max(...stopped.map(band => band.bottom)));
   const drifting = await levels();
   expect(drifting.height).toBe(4);
   expect(drifting.peak).toBeGreaterThan(drifting.height);
@@ -109,10 +124,13 @@ test('伴奏静音与停止时柱高和峰值自然落零，重新播放立即�
   expect((await levels()).peak).toBe(4);
   expect(await spectrum.locator('i').evaluateAll(bars => bars.every(bar => getComputedStyle(bar, '::after').height === '0px'))).toBe(true);
   await card.screenshot({ path: test.info().outputPath('baseline.png') });
+  await expect.poll(floorState).toEqual(Array(21).fill({ body: 0, bottom: 0, cap: 2 }));
+  await section.locator('.listening-cards').screenshot({ path: test.info().outputPath('floor-comparison.png') });
   await page.clock.runFor(319);
   expect(await heights()).toEqual(Array(21).fill(4));
   await page.clock.runFor(1);
   await expect(spectrum).toHaveCount(0);
+  await expect(floorSpectrum).toHaveCount(0);
   await card.screenshot({ path: test.info().outputPath('silent.png') });
   await page.clock.resume();
 

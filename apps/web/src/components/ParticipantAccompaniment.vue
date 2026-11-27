@@ -92,7 +92,7 @@ async function choose(id: string) {
 </script>
 
 <template>
-  <AccompanimentSpectrum v-if="visible && !screen" :track="sharing ? track : undefined" :context="context" responsive />
+  <AccompanimentSpectrum v-if="visible && !screen" :track="sharing ? track : undefined" :context="context" />
   <AccompanimentBadge v-if="sharing || (local && !screen && bridge?.listApplicationAudioSources)" :local="local"
     :sharing="sharing" :icon="sharing && icons[sharing]" :busy="local && busy" :open="!!anchor" @activate="activate" />
   <Teleport to="body">
