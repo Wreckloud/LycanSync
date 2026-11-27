@@ -25,7 +25,7 @@ const { createDesktopTray } = require('./desktop-tray.cjs');
 const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
-const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
+const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader, observeVoiceSignalFailures } = require('./media-diagnostics.cjs');
 const { compactSavedSamples, createDiagnosticReportStore, parseDiagnosticReport, reportIdPattern } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
@@ -871,6 +871,7 @@ if (!app.requestSingleInstanceLock()) {
       webPreferences: { preload: resolve(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
     });
     mainWindow.setMenu(null);
+    observeVoiceSignalFailures(mainWindow.webContents, writeMediaDiagnostic);
     desktopTray.initialize();
     screenShareWindows.attach(mainWindow);
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());

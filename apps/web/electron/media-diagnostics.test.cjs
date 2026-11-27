@@ -5,7 +5,7 @@ const { runInNewContext } = require('node:vm');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
-const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
+const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader, observeVoiceSignalFailures } = require('./media-diagnostics.cjs');
 const { EventEmitter } = require('node:events');
 const { parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 
@@ -424,6 +424,34 @@ test('声音启动只导出固定摘要字段，缺失阶段不补零，不泄�
     assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [{ time, stage: 'screenAudioStartup',
       durationMs: 500, hresults: [], outcome: 'failed', phase: 'graph', pluginLoadMs: 12, captureReadyMs: 340 }]);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('信令握手与校验只记录主窗口的网络错误或 HTTP 失败状态', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycansync-voice-signal-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const write = createMediaDiagnostics(path);
+  let failed, completed;
+  observeVoiceSignalFailures({ id: 3, session: { webRequest: {
+    onErrorOccurred: (_filter, listener) => { failed = listener; },
+    onCompleted: (_filter, listener) => { completed = listener; },
+  } } }, write);
+  const socket = { method: 'GET', webContentsId: 3, url: 'wss://private-host/rtc/v1?access_token=private-token' };
+  const validate = { ...socket, url: 'https://private-host/rtc/validate?access_token=private-token' };
+  failed({ ...socket, error: 'net::ERR_CONNECTION_TIMED_OUT' });
+  completed({ ...validate, statusCode: 403 });
+  completed({ ...validate, statusCode: 200 });
+  failed({ ...socket, error: 'private-message' });
+  failed({ ...socket, webContentsId: 5, error: 'net::ERR_FAILED' });
+  failed({ ...validate, url: 'https://private-host/api/rtc/token', error: 'net::ERR_FAILED' });
+  await write.flush();
+  const raw = await readFile(path, 'utf8');
+  assert.doesNotMatch(raw, /private-|access_token/);
+  const events = await readDiagnosticEvents(path, 0, Date.now());
+  assert.deepEqual(events.map(({ time, hresults, ...event }) => event), [
+    { stage: 'voiceSignalRequestFailed', requestKind: 'websocket', networkError: 'net::ERR_CONNECTION_TIMED_OUT' },
+    { stage: 'voiceSignalRequestFailed', requestKind: 'validate', httpStatus: 403 },
+  ]);
 });
 
 test('语音入房摘要校验阶段耗时并保留关麦状态，不记录附加字段', async () => {

@@ -53,6 +53,25 @@ function createMediaDiagnostics(path, maxBytes = 1024 * 1024) {
   return write;
 }
 
+// SDK 会把不同的握手错误合并为 JOIN_FAILURE。仅记录传输结果，URL 查询串含入房凭证。
+function observeVoiceSignalFailures(contents, write) {
+  const contentsId = contents.id;
+  const filter = { urls: ['ws://*/*rtc*', 'wss://*/*rtc*', 'http://*/*rtc*', 'https://*/*rtc*'] };
+  const observe = (request) => {
+    if (request.webContentsId !== contentsId || request.method !== 'GET') return;
+    const { pathname, protocol } = new URL(request.url);
+    const websocket = ['ws:', 'wss:'].includes(protocol) && /\/rtc(?:\/v1)?$/.test(pathname);
+    const validate = ['http:', 'https:'].includes(protocol) && /\/rtc(?:\/v1)?\/validate$/.test(pathname);
+    if (!websocket && !validate) return;
+    const entry = { stage: 'voiceSignalRequestFailed', requestKind: websocket ? 'websocket' : 'validate' };
+    if (request.statusCode >= 400 && request.statusCode <= 599) entry.httpStatus = request.statusCode;
+    if (request.error && /^net::ERR_[A-Z0-9_]{1,64}$/.test(request.error)) entry.networkError = request.error;
+    if (entry.httpStatus || entry.networkError) void write(entry);
+  };
+  contents.session.webRequest.onErrorOccurred(filter, observe);
+  contents.session.webRequest.onCompleted(filter, details => { if (details.statusCode >= 400) observe(details); });
+}
+
 // 仅读取有界日志尾部；导出阶段/错误码，不把异常正文、路径或凭据带入报告。
 async function readDiagnosticEvents(path, startedAt, endedAt) {
   const events = [];
@@ -229,6 +248,11 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           if (Number.isInteger(entry.httpStatus) && entry.httpStatus >= 100 && entry.httpStatus <= 599) details.httpStatus = entry.httpStatus;
           if (['response', 'networkError', 'localError', 'cancelled'].includes(entry.outcome)) details.outcome = entry.outcome;
         }
+        if (stage === 'voiceSignalRequestFailed') {
+          if (['websocket', 'validate'].includes(entry.requestKind)) details.requestKind = entry.requestKind;
+          if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(entry.networkError)) details.networkError = entry.networkError;
+          if (Number.isInteger(entry.httpStatus) && entry.httpStatus >= 400 && entry.httpStatus <= 599) details.httpStatus = entry.httpStatus;
+        }
         if (stage === 'voiceJoinReady') {
           for (const key of ['preflightMs', 'tokenMs', 'connectMs', 'roomReadyMs', 'microphoneMs', 'listeningMs']) {
             if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
@@ -318,4 +342,4 @@ function createProcessMetricsReader(openNativeProcess, { now = () => performance
   };
 }
 
-module.exports = { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader };
+module.exports = { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader, observeVoiceSignalFailures };
